@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+*.so
+build/
+
+# Claude Code session state (harness-internal, not project content)
+.claude/
+CLAUDE.md
+
+# Secrets / local environment overrides — never commit
+.env
+.env.*
+!.env.example
+
+# uv
+uv.lock.bak
+
+# ML model weights and downloaded checkpoints (multi-GB, never commit)
+models/
+vendor/*/checkpoints/
+*.pth
+*.safetensors
+*.ckpt
+*.bin
+
+# Generated pipeline output
+output/*
+!output/.gitkeep
+
+# macOS
+.DS_Store
+
+# Editors
+.vscode/
+.idea/

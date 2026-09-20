@@ -1,0 +1,32 @@
+[project]
+name = "trellis2mlx"
+version = "0.1.0"
+description = "MLX-native TRELLIS.2 inference for Apple Silicon"
+requires-python = ">=3.11"
+dependencies = [
+    "mlx>=0.30",
+    "numpy",
+    "huggingface-hub",
+    "safetensors",
+    "pillow",
+    "trimesh",
+    "scipy",
+    "scikit-image",
+    "tqdm",
+    "fast-simplification",
+    "libigl",
+    "xatlas",
+    "opencv-python",
+    "rembg[cpu]",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+image = ["torch", "torchvision", "transformers"]
+
+[tool.setuptools.packages.find]
+include = ["trellmlx*"]
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"

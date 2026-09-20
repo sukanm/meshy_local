@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>messy_local</title>
+<script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js"></script>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    max-width: 720px;
+    margin: 2rem auto;
+    padding: 0 1rem;
+    background: Canvas;
+    color: CanvasText;
+  }
+  h1 { font-size: 1.3rem; }
+  textarea, input[type="number"] {
+    width: 100%;
+    box-sizing: border-box;
+    font: inherit;
+    padding: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+  label { display: block; font-size: 0.85rem; opacity: 0.8; margin-bottom: 0.2rem; }
+  select {
+    width: 100%;
+    box-sizing: border-box;
+    font: inherit;
+    padding: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+  input[type="range"] { width: 100%; }
+  .slider-value { font-size: 0.8rem; opacity: 0.7; }
+  details {
+    margin-bottom: 0.75rem;
+    border: 1px solid color-mix(in srgb, CanvasText 20%, transparent);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+  }
+  details summary { cursor: pointer; font-size: 0.9rem; }
+  details .row { margin-top: 0.75rem; }
+  button {
+    font: inherit;
+    padding: 0.6rem 1.2rem;
+    cursor: pointer;
+  }
+  button:disabled { cursor: default; opacity: 0.6; }
+  #status { margin-top: 1.5rem; }
+  #stage { font-weight: 600; }
+  model-viewer {
+    width: 100%;
+    height: 360px;
+    margin-top: 1rem;
+    background: #f0f0f0;
+    border-radius: 8px;
+  }
+  .row { display: flex; gap: 1rem; }
+  .row > div { flex: 1; }
+  ul { padding-left: 1.2rem; }
+  .PRINT_READY { color: #1a7a1a; }
+  .PRINT_READY_WITH_WARNINGS { color: #b8860b; }
+  .NEEDS_MANUAL_REPAIR { color: #b00020; }
+  #error { color: #b00020; margin-top: 1rem; }
+  #download { display: none; margin-top: 1rem; }
+</style>
+</head>
+<body>
+  <h1>messy_local — text → 3D → STL</h1>
+
+  <div class="row">
+    <div>
+      <label for="prompt">Prompt</label>
+      <textarea id="prompt" rows="2" placeholder="a small cute robot figurine">a small cute robot figurine</textarea>
+    </div>
+  </div>
+  <div class="row">
+    <div style="max-width: 160px;">
+      <label for="scale">Target longest dimension (mm)</label>
+      <input id="scale" type="number" value="80" min="1" max="256" />
+    </div>
+    <div style="max-width: 160px;">
+      <label for="seed">Seed (optional)</label>
+      <input id="seed" type="number" placeholder="random" />
+    </div>
+  </div>
+
+  <details>
+    <summary>Advanced options</summary>
+    <div class="row">
+      <div>
+        <label for="imageModel">Image-to-3D model</label>
+        <select id="imageModel">
+          <option value="trellis2" selected>TRELLIS.2 (detailed, default)</option>
+          <option value="sf3d">Stable Fast 3D (smoother, texture-only detail)</option>
+        </select>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label for="smoothing">Smoothing (Taubin passes after repair fallback) — <span id="smoothingValue" class="slider-value"></span></label>
+        <input id="smoothing" type="range" min="0" max="25" step="1" />
+      </div>
+      <div>
+        <label for="detail">Mesh detail (voxel resolution, repair fallback only) — <span id="detailValue" class="slider-value"></span></label>
+        <input id="detail" type="range" min="50" max="600" step="10" />
+      </div>
+    </div>
+    <p class="slider-value">Both sliders only affect output when the repair stage has to fall back to voxel remeshing to make a mesh watertight (shown in the report below as "voxel_remesh_used") — most jobs don't hit this path at all.</p>
+    <div class="row">
+      <div>
+        <label for="candidates">Candidates (TRELLIS.2 only) — <span id="candidatesValue" class="slider-value"></span></label>
+        <input id="candidates" type="range" min="1" max="8" step="1" />
+      </div>
+    </div>
+    <p class="slider-value">Generates this many reconstructions with different seeds and keeps the cleanest one (by topology-defect count) — a real quality win found by direct testing (same source image, one seed had 87% of its surface below the wall-thickness floor, another had 22%), at the cost of roughly multiplying image-to-3D generation time. 1 disables this and generates once, the old behavior.</p>
+  </details>
+
+  <button id="generate">Generate</button>
+
+  <div id="error"></div>
+
+  <div id="status" hidden>
+    <div>Job: <code id="jobId"></code></div>
+    <div>Status: <span id="jobStatus"></span> — <span id="stage"></span></div>
+    <model-viewer id="viewer" hidden camera-controls auto-rotate exposure="1"></model-viewer>
+    <div id="report"></div>
+    <a id="download" href="#" download>Download STL</a>
+  </div>
+
+<script src="app.js"></script>
+</body>
+</html>

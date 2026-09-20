@@ -1,0 +1,53 @@
+[project]
+name = "messy-local"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "einops==0.7.0",
+    "fastapi>=0.141.1",
+    "gpytoolbox>=0.3.0",
+    "huggingface-hub==0.23.4",
+    "jaxtyping==0.2.31",
+    "networkx>=3.6.1",
+    "omegaconf==2.3.0",
+    "open-clip-torch==2.24.0",
+    "pymeshlab>=2025.7.post1",
+    "pynanoinstantmeshes==0.0.3",
+    "rembg==2.0.57",
+    "rtree>=1.4.1",
+    "scipy>=1.17",
+    "texture-baker",
+    "torch",
+    "torchvision",
+    "transformers==4.42.3",
+    "trimesh==4.4.1",
+    "uv-unwrapper",
+    "uvicorn[standard]>=0.53.0",
+]
+
+[tool.uv]
+required-environments = ["sys_platform == 'darwin' and platform_machine == 'arm64'"]
+no-build-isolation-package = ["texture-baker", "uv-unwrapper"]
+prerelease = "allow"
+
+[tool.uv.sources]
+torch = { index = "pytorch-nightly" }
+torchvision = { index = "pytorch-nightly" }
+texture-baker = { path = "vendor/stable-fast-3d/texture_baker", editable = true }
+uv-unwrapper = { path = "vendor/stable-fast-3d/uv_unwrapper", editable = true }
+
+[[tool.uv.index]]
+name = "pytorch-nightly"
+url = "https://download.pytorch.org/whl/nightly/cpu"
+explicit = true
+
+[dependency-groups]
+dev = [
+    "manifold3d>=3.5.3",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
