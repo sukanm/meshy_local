@@ -36,7 +36,7 @@ A job runs these stages in order. Each stage is a swappable `Protocol` in `pipel
 | # | Stage | What it does | Tool |
 |---|---|---|---|
 | 1 | **Text → image** | Generates a concept image from the prompt. Skipped when you supply a [reference image](#reference-images-and-web-search). | [mflux](https://github.com/filipstrand/mflux) Z-Image Turbo (MLX) |
-| 2 | **Image → 3D** | Reconstructs a textured mesh from the image, removing the background first. By default it makes 3 candidates and keeps the cleanest. | [TRELLIS.2](https://github.com/microsoft/TRELLIS) (vendored MLX port), or [Stable Fast 3D](https://github.com/Stability-AI/stable-fast-3d) |
+| 2 | **Image → 3D** | Cuts the object out of the image ([BiRefNet](https://github.com/ZhengPeng7/BiRefNet), as in the official TRELLIS.2), then reconstructs a textured mesh. By default it makes 3 candidates and keeps the cleanest. | [TRELLIS.2](https://github.com/microsoft/TRELLIS) (vendored MLX port), or [Stable Fast 3D](https://github.com/Stability-AI/stable-fast-3d) |
 | 3 | **Repair** | Makes the mesh watertight and manifold, scales it to your size, and stands it upright (Z-up). Measures wall thickness. | trimesh, PyMeshLab, scikit-image |
 | 4 | **Print prep** | Thickens walls by a uniform outward offset where they're too thin to print, flattens the bottom (or adds a plinth), and places the model on the plate. | Blender (headless): OpenVDB and the Manifold boolean |
 | 5 | **Export** | Writes the STL, then checks its topology again the way a slicer reads it. | trimesh |
@@ -106,6 +106,9 @@ and `uv.lock` are left over from before the move to conda and aren't used for in
 The vendored TRELLIS.2 code loads two repos at fixed snapshot hashes (`af44b45f…` for
 `TRELLIS.2-4B` and `25e0d31f…` for `TRELLIS-image-large`; see `vendor/trellis2mlx/generate.py`).
 If you pre-download them, download those revisions, not `main`.
+
+The first TRELLIS.2 job also downloads the BiRefNet background-removal model (973MB, from
+rembg's GitHub releases) into `~/.rembg/models/`.
 
 ## Using the web UI
 
@@ -251,6 +254,7 @@ Everything for a job is in `output/<job_id>/`:
 |---|---|
 | `job.json` | Job state, settings, the repair report, slice results and file names. |
 | `concept_image.png` / `reference_image.png` | The image the 3D model was built from. |
+| `input_cutout.png` | That image with the background removed (TRELLIS.2 only). |
 | `raw_mesh.glb` | TRELLIS.2/SF3D's raw textured output. |
 | `candidate_selection.json` | Topology-defect score of each TRELLIS.2 candidate. |
 | `print_ready_mesh.ply` | After repair. |
@@ -269,8 +273,9 @@ Everything for a job is in `output/<job_id>/`:
 | `IMAGE_GEN_STEPS`, `IMAGE_GEN_SIZE_PX` | 20, 512 | Z-Image Turbo steps and size. More than 512px is wasted, since TRELLIS.2 conditions at 512. |
 | `IMAGE_GEN_PROMPT_SUFFIX` | "single object, centered, white background … thick-walled, sturdy, solid form" | Appended to every prompt; measurably reduces thin walls. |
 | `TRELLIS2_NUM_CANDIDATES` | 3 | Best-of-N reconstruction. |
+| `BACKGROUND_REMOVAL_MODEL` | `birefnet-general` | rembg model that cuts the object out before TRELLIS.2. `u2net` is the old behaviour; `None` leaves it to TRELLIS.2. |
 | `WALL_OFFSET_AUTO_MM` | 0.3 | Offset applied in auto mode when walls are too thin. |
-| `VOXEL_FILL_SEAL_VOXELS` | 2 | Gap size the repair fill seals (see [design notes](#design-notes-and-lessons-learned)). |
+| `VOXEL_FILL_SEAL_VOXELS` / `VOXEL_FILL_SEAL_MAX_VOXELS` | 2 / 8 | Gap size the repair fill seals by default, and how far it widens when the interior leaks (see [design notes](#design-notes-and-lessons-learned)). |
 | `BASE_MODE_DEFAULT` | `flatten` | `flatten`, `plinth` or `none`. |
 | `BAMBU_MACHINE_PROFILE` / `BAMBU_PROCESS_PROFILE` / `BAMBU_FILAMENT_PROFILE` | P2S 0.4, 0.12mm HQ, PLA Basic | Bambu system profiles used for slicing. |
 | `BAMBU_PROCESS_OVERRIDES` | Arachne, fine features, tree supports | Changes on top of the process profile. |
@@ -340,6 +345,11 @@ These are the decisions that shaped the pipeline, each tested on real output rat
   The fix is a morphological closing (`_solid_fill`): seal small gaps, flood the outside, erode
   back. On the same Godzilla, volume went from 494 to 13,071mm³ and the spikes stayed sharp without
   any thickening.
+
+  A fixed seal wasn't enough: two later meshes had a gap just too wide for it and shipped hollow
+  again without a warning. The seal now widens (up to 8 voxels) only when a wider one shows the
+  interior was leaking, i.e. the solid jumps rather than growing slowly. The repair report says
+  when it widened, and a model that still can't be filled gets a blocking `hollow_fill` issue.
 - **The detail-recovery snap.** After voxel remeshing, every vertex is pulled back to the original
   surface, which restores teeth, claws and scale texture. The result is checked and repaired
   (`mesh_topology.weld_and_repair`, including a fix for holes that share a vertex). If repair

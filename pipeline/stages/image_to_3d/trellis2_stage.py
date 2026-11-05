@@ -49,6 +49,21 @@ from pipeline import config
 from pipeline.types import GeneratedImage, RawMesh
 
 TRELLIS2_DIR = config.VENDOR_DIR / "trellis2mlx"
+REMOVE_BACKGROUND_SCRIPT = Path(__file__).with_name("remove_background.py")
+CUTOUT_FILENAME = "input_cutout.png"
+
+
+def _has_transparency(path: Path) -> bool:
+    """Whether an image already carries a cut-out (any alpha below 255) —
+    the same test generate.py uses to decide whether to skip its own
+    background removal."""
+    import numpy as np
+    from PIL import Image
+
+    with Image.open(path) as img:
+        if img.mode != "RGBA":
+            return False
+        return bool((np.asarray(img)[:, :, 3] < 255).any())
 
 
 def _topology_defect_count(mesh_path: Path) -> int:
@@ -126,11 +141,44 @@ class Trellis2Stage:
                 f"{result.stderr[-4000:]}"
             )
 
+    def _cut_out_background(self, image: GeneratedImage, work_dir: Path) -> tuple[GeneratedImage, dict]:
+        """Cuts the object out once per job with config.BACKGROUND_REMOVAL_MODEL
+        and returns the RGBA cut-out to reconstruct from (generate.py then
+        skips its own u2net pass, for every candidate). Never fails the job:
+        on any problem it returns the original image and generate.py removes
+        the background itself, as before."""
+        model = config.BACKGROUND_REMOVAL_MODEL
+        if not model:
+            return image, {"model": "generate.py default (u2net)"}
+        if _has_transparency(image.image_path):
+            return image, {"model": "none — input already has transparency"}
+        cutout_path = work_dir / CUTOUT_FILENAME
+        try:
+            result = subprocess.run(
+                [str(self.python), str(REMOVE_BACKGROUND_SCRIPT), str(image.image_path), str(cutout_path),
+                 "--model", model],
+                capture_output=True,
+                text=True,
+                timeout=600,  # first use downloads the model (~1GB)
+            )
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            print(f"  Background removal with {model} failed ({exc}); generate.py will use u2net.")
+            return image, {"model": "generate.py default (u2net)", "error": f"{model}: {exc}"}
+        if result.returncode != 0 or not cutout_path.exists():
+            detail = (result.stderr.strip().splitlines() or ["no output"])[-1]
+            print(f"  Background removal with {model} failed ({detail}); generate.py will use u2net.")
+            return image, {"model": "generate.py default (u2net)", "error": f"{model}: {detail}"}
+        info = json.loads(result.stdout.strip().splitlines()[-1])
+        print(f"  Background removed with {model} in {info['load_s'] + info['run_s']:.1f}s")
+        return GeneratedImage(image_path=cutout_path, prompt=image.prompt,
+                              generation_metadata=image.generation_metadata), info
+
     def reconstruct(
         self, image: GeneratedImage, work_dir: Path, num_candidates: int | None = None
     ) -> RawMesh:
         work_dir.mkdir(parents=True, exist_ok=True)
         out_path = work_dir / "raw_mesh.glb"
+        image, background_removal = self._cut_out_background(image, work_dir)
 
         if num_candidates is None:
             num_candidates = config.TRELLIS2_NUM_CANDIDATES
@@ -146,6 +194,7 @@ class Trellis2Stage:
                     "target_faces": self.target_faces,
                     "steps": self.steps,
                     "texture_size": self.texture_size,
+                    "background_removal": background_removal,
                 },
             )
 
@@ -205,6 +254,7 @@ class Trellis2Stage:
                 "target_faces": self.target_faces,
                 "steps": self.steps,
                 "texture_size": self.texture_size,
+                "background_removal": background_removal,
                 "num_candidates": num_candidates,
                 "selected_seed": best_seed,
                 "candidate_selection": selection_report,

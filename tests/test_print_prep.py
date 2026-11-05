@@ -266,3 +266,36 @@ def test_voxel_fill_is_solid_despite_surface_holes():
     assert surface.copy().fill().matrix.sum() * pitch**3 < 0.25 * sphere.volume  # the old fill stays hollow
     solid = _solid_fill(surface.matrix, config.VOXEL_FILL_SEAL_VOXELS)
     assert solid.sum() * pitch**3 == pytest.approx(sphere.volume, rel=0.15)
+
+
+def _sphere_with_hole(hole_radius: float) -> np.ndarray:
+    sphere = trimesh.creation.icosphere(subdivisions=5, radius=10)
+    dist = np.linalg.norm(sphere.triangles_center - np.array([0, 0, 10.0]), axis=1)
+    leaky = sphere.copy()
+    leaky.update_faces(dist > hole_radius)
+    leaky.remove_unreferenced_vertices()
+    return leaky.voxelized(pitch=0.4).matrix
+
+
+@pytest.mark.parametrize("hole_radius, expected_seal", [(1.0, 2), (1.2, 3), (2.0, 5)])
+def test_fill_widens_the_seal_only_when_the_interior_leaks(hole_radius, expected_seal):
+    """Regression (2026-11-05): one real mesh had a gap just wider than the
+    default seal, so the fill leaked and the model shipped hollow (813mm³ vs
+    ~11,000mm³) with no warning. The fill must widen the seal as far as
+    needed, and no further."""
+    from pipeline.stages.repair.trimesh_repair import _adaptive_solid_fill
+
+    surface = _sphere_with_hole(hole_radius)
+    solid, info = _adaptive_solid_fill(surface)
+    assert info["seal_voxels"] == expected_seal
+    assert info["seal_widened"] == (expected_seal > config.VOXEL_FILL_SEAL_VOXELS)
+    assert not info["hollow"]
+    sphere_volume = 4 / 3 * np.pi * 10**3
+    assert solid.sum() * 0.4**3 == pytest.approx(sphere_volume, rel=0.15)
+
+
+def test_fill_reports_a_hole_too_wide_to_seal():
+    from pipeline.stages.repair.trimesh_repair import _adaptive_solid_fill
+
+    _solid, info = _adaptive_solid_fill(_sphere_with_hole(5.0))
+    assert info["hollow"]

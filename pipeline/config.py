@@ -201,6 +201,21 @@ VOXEL_REMESH_SIMPLIFY_TARGET_FACES = 250_000
 # this between separate features also get filled.
 VOXEL_FILL_SEAL_VOXELS = 2
 
+# Adaptive seal (2026-11-05). One real mesh (spiky Godzilla, seed 7, u2net
+# cut-out) had a gap just wider than a 2-voxel seal closes: the interior
+# leaked, the fill stayed hollow (813mm3, solid = 1.2x the surface voxels),
+# and nothing flagged it. Seal 3 filled it (6.6x). So the fill now compares
+# against the widest seal below; if that one gives more than
+# VOXEL_FILL_LEAK_TOLERANCE x the solid, the smaller seal leaked, and the
+# smallest seal that doesn't is used. Without a leak, widening the seal only
+# grows the solid slowly (narrow concave gaps filling in: 6.25x -> 6.68x from
+# 2 to 8 on the same subject), so the default 2 is kept.
+VOXEL_FILL_SEAL_MAX_VOXELS = 8
+VOXEL_FILL_LEAK_TOLERANCE = 1.15
+# After the fill, a solid this close to the surface voxel count is still
+# (nearly) hollow — reported as a blocking issue rather than shipped silently.
+VOXEL_FILL_HOLLOW_RATIO = 1.5
+
 # Threshold (as a multiple of the mesh's own median edge length) for
 # detecting degenerate "sliver" triangles introduced by PyMeshLab's
 # decimation — see mesh_topology.find_sliver_edges for the full incident
@@ -359,6 +374,16 @@ IMAGE_GEN_PROMPT_SUFFIX = (
 # win and tripling generation time (~3.5-4min -> ~10-12min per job); still
 # overridable per-request (CLI --candidates, web UI control).
 TRELLIS2_NUM_CANDIDATES = 3
+
+# --- Image-to-3D: background removal (2026-11-05) ----------------------------
+# rembg model used to cut the object out before TRELLIS.2. The official
+# TRELLIS.2 pipeline uses BiRefNet; the vendored MLX port defaults to u2net,
+# which kept background between Godzilla's spikes (-> webbing) and clipped
+# toes/fingers on this project's own concept images. Done once per job (not
+# once per candidate), ~5s on CPU. Set to "u2net" to match the old behaviour,
+# or None to let generate.py do its own removal. An input that already has
+# transparency (e.g. an uploaded cut-out PNG) is used as-is.
+BACKGROUND_REMOVAL_MODEL: str | None = "birefnet-general"
 
 # --- Blender integration (2026-11-03) ---------------------------------------
 # Blender 5.2 is used headlessly (`blender -b --python ...`, subprocess — same

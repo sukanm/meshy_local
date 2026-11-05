@@ -142,6 +142,8 @@ class Pipeline:
             self._save(job, job_dir)
             raw_mesh = self.image_to_3d.reconstruct(image, job_dir, num_candidates=num_candidates)
             job.raw_mesh_path = raw_mesh.mesh_path
+            if "background_removal" in raw_mesh.generation_metadata:
+                job.stage_config["background_removal"] = raw_mesh.generation_metadata["background_removal"]
             self._save(job, job_dir)
 
             job.current_stage = "repair"

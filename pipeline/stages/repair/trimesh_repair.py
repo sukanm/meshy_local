@@ -258,6 +258,42 @@ def _solid_fill(surface: np.ndarray, seal_voxels: int) -> np.ndarray:
     return solid[k + 1 : -(k + 1), k + 1 : -(k + 1), k + 1 : -(k + 1)]
 
 
+def _adaptive_solid_fill(
+    surface: np.ndarray,
+    seal_voxels: int = config.VOXEL_FILL_SEAL_VOXELS,
+    max_seal_voxels: int = config.VOXEL_FILL_SEAL_MAX_VOXELS,
+) -> tuple[np.ndarray, dict]:
+    """_solid_fill with the smallest seal that doesn't leak.
+
+    A gap in the surface wider than the seal lets the outside flood the
+    interior, and the fill comes back as a hollow shell. That shows up as a
+    jump in solid volume once the seal is wide enough to close the gap. The
+    widest seal is computed once as the reference; the first seal from
+    `seal_voxels` upward whose solid is within VOXEL_FILL_LEAK_TOLERANCE of it
+    is used. Usually that's `seal_voxels` itself (two fills, ~1s)."""
+    surface_count = max(int(surface.sum()), 1)
+    widest = _solid_fill(surface, max_seal_voxels)
+    target = int(widest.sum()) / config.VOXEL_FILL_LEAK_TOLERANCE
+    solid, used = widest, max_seal_voxels
+    first_count = None
+    for k in range(int(seal_voxels), int(max_seal_voxels)):
+        candidate = _solid_fill(surface, k)
+        if first_count is None:
+            first_count = int(candidate.sum())
+        if candidate.sum() >= target:
+            solid, used = candidate, k
+            break
+    ratio = int(solid.sum()) / surface_count
+    info = {
+        "seal_voxels": used,
+        "seal_widened": used > seal_voxels,
+        "solid_to_surface_ratio": round(ratio, 2),
+        "default_seal_ratio": round((first_count if first_count is not None else int(solid.sum())) / surface_count, 2),
+        "hollow": ratio < config.VOXEL_FILL_HOLLOW_RATIO,
+    }
+    return solid, info
+
+
 def _voxel_remesh(
     mesh: trimesh.Trimesh,
     reference: trimesh.Trimesh | None = None,
@@ -265,8 +301,10 @@ def _voxel_remesh(
     smoothing_iterations: int = config.VOXEL_REMESH_SMOOTHING_ITERATIONS,
     snap_to_reference: bool = True,
     pitch_mm: float | None = None,
-) -> tuple[trimesh.Trimesh, bool, float]:
-    """Returns (mesh, detail_recovered, thickened_fraction). detail_recovered
+) -> tuple[trimesh.Trimesh, bool, float, dict]:
+    """Returns (mesh, detail_recovered, thickened_fraction, fill_info).
+    fill_info is _adaptive_solid_fill's report on the interior fill.
+    detail_recovered
     is False when the snap was attempted but discarded for having too many
     residual defects once welded the way an STL consumer would (see class
     docstring above). thickened_fraction is the fraction of solid voxels
@@ -294,9 +332,8 @@ def _voxel_remesh(
     extent = mesh.bounds[1] - mesh.bounds[0]
     pitch = extent.max() / resolution
     surface = mesh.voxelized(pitch=pitch)
-    vox = trimesh.voxel.VoxelGrid(
-        _solid_fill(surface.matrix, config.VOXEL_FILL_SEAL_VOXELS), transform=surface.transform
-    )
+    solid, fill_info = _adaptive_solid_fill(surface.matrix)
+    vox = trimesh.voxel.VoxelGrid(solid, transform=surface.transform)
 
     added_mask = None
     thickened_fraction = 0.0
@@ -432,7 +469,7 @@ def _voxel_remesh(
         # watertight via its own fan-fill, same as the first pass.
         remeshed = remove_slivers(remeshed, config.SLIVER_EDGE_LENGTH_MULTIPLE)
 
-    return remeshed, detail_recovered, thickened_fraction
+    return remeshed, detail_recovered, thickened_fraction, fill_info
 
 
 def remove_small_floaters(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, int, float]:
@@ -561,13 +598,30 @@ class TrimeshRepairStage:
             # place (target_longest_dimension_mm / resolution ~=
             # DETAIL_TARGET_VOXEL_PITCH_MM when resolution isn't clamped).
             pitch_mm = target_longest_dimension_mm / voxel_resolution
-            m, detail_recovered, thickened_fraction = _voxel_remesh(
+            m, detail_recovered, thickened_fraction, fill_info = _voxel_remesh(
                 m,
                 reference=reference_mesh,
                 resolution=voxel_resolution,
                 smoothing_iterations=smoothing_iterations,
                 pitch_mm=pitch_mm,
             )
+            if fill_info["seal_widened"]:
+                actions.append(
+                    f"Widened the interior-fill seal to {fill_info['seal_voxels']} voxels: the surface had a gap "
+                    f"too wide for the default {config.VOXEL_FILL_SEAL_VOXELS}, and the model would otherwise "
+                    f"have come out hollow (solid {fill_info['default_seal_ratio']}x the surface voxels -> "
+                    f"{fill_info['solid_to_surface_ratio']}x)"
+                )
+            if fill_info["hollow"]:
+                issues.append(
+                    Issue(
+                        code="hollow_fill",
+                        message="The model's interior could not be filled solid (gaps in the generated "
+                        f"surface wider than the {config.VOXEL_FILL_SEAL_MAX_VOXELS}-voxel seal), so it is a "
+                        "thin hollow shell that is likely to collapse when printed. Try another seed.",
+                        severity=Severity.BLOCKING,
+                    )
+                )
             if thickened_fraction > 0:
                 actions.append(
                     f"Locally thickened {thickened_fraction * 100:.2f}% (by solid-voxel count) of thin "
