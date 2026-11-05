@@ -583,7 +583,7 @@ wheels = [
 ]
 
 [[package]]
-name = "messy-local"
+name = "meshy-local"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [

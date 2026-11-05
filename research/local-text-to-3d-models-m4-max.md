@@ -1,6 +1,6 @@
 # Local Text-to-3D Models on Apple M4 Max (48GB) — Research Notes
 
-Research date: September 2026. Scope: given a Mac with an Apple **M4 Max** chip and **48GB unified memory**, what local (on-device, open-weight) options exist today for a **prompt → 3D mesh → STL** pipeline, and how well do they actually run on that hardware? This is a hardware-focused companion to the general Meshy.ai research (`meshy-ai-research.md`) and is meant to inform real build decisions for `messy_local`.
+Research date: September 2026. Scope: given a Mac with an Apple **M4 Max** chip and **48GB unified memory**, what local (on-device, open-weight) options exist today for a **prompt → 3D mesh → STL** pipeline, and how well do they actually run on that hardware? This is a hardware-focused companion to the general Meshy.ai research (`meshy-ai-research.md`) and is meant to inform real build decisions for `meshy_local`.
 
 ---
 

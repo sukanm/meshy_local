@@ -37,7 +37,7 @@ from server.schemas import (  # noqa: E402
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-app = FastAPI(title="messy_local")
+app = FastAPI(title="meshy_local")
 
 
 @app.middleware("http")

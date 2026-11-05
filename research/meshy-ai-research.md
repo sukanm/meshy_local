@@ -1,6 +1,6 @@
 # Meshy.ai Research
 
-Research compiled for the `messy_local` project — a local-first macOS app aiming to replicate Meshy's core text-prompt → 3D model → STL workflow for printing on a Bambu Lab P2S. This document is a factual reference on what Meshy does, how it appears to work, and what local/open-source building blocks could substitute for it.
+Research compiled for the `meshy_local` project — a local-first macOS app aiming to replicate Meshy's core text-prompt → 3D model → STL workflow for printing on a Bambu Lab P2S. This document is a factual reference on what Meshy does, how it appears to work, and what local/open-source building blocks could substitute for it.
 
 ---
 
@@ -173,7 +173,7 @@ These take an image and reconstruct a 3D mesh; they'd be paired with a local tex
 
 **3D Mate** ([3dmate.app](https://3dmate.app/)) is a directly comparable existing product worth studying closely: a native Mac app (macOS 15+, Apple Silicon only) that bundles multiple local image-to-3D models (TRELLIS.2 4B, TripoSG, TripoSR, Stable Fast 3D, SPAR3D, SAM 3D Objects, with Hunyuan3D-2 "coming soon"), plus macOS's built-in **Object Capture** for photogrammetry-based scanning. It exports GLB/OBJ/**STL**/PLY/3MF/USDZ. Pricing is a flat subscription ($49.99/yr) or lifetime ($149.99) with no credits/metering — a notably different model from Meshy's per-generation credits. Minimum spec is 8GB unified memory (for the lightest model, TripoSR); TRELLIS.2 needs 24GB. This app validates that (a) bundling several local open-weight reconstruction models in one native Mac app is feasible today, and (b) it is image-to-3D only — none of its bundled models take a raw text prompt directly, reinforcing that a text-to-image step is a necessary separate stage for a local text-to-3D pipeline.
 
-### 4.4 Architecture takeaway for messy_local
+### 4.4 Architecture takeaway for meshy_local
 
 The realistic 2026 local pipeline is:
 ```
@@ -220,7 +220,7 @@ The CEO interview is candid about real, unsolved limitations — useful ground t
 - **Repair/validation tooling is still roadmap, not shipped**: wall-thickness validation, hollowing, and fully automatic repair are described as **planned future capabilities**, not current features (as of the interview).
 - **Bambu Studio hand-off has no orientation optimization or error-checking during the hand-off itself** — the integration is a convenience (skip the manual file transfer) rather than a print-optimization feature; the user still needs to check orientation/supports in the slicer.
 
-**Takeaway for messy_local:** even a well-funded, high-traffic incumbent with this as its top use case has not fully solved AI-mesh → guaranteed-printable-STL. This is a genuinely hard, still-open problem — our local app should treat mesh repair/print-validation as a first-class pipeline stage to build deliberately, not a trivial post-processing afterthought, and should not assume any single generation model's raw output will be watertight.
+**Takeaway for meshy_local:** even a well-funded, high-traffic incumbent with this as its top use case has not fully solved AI-mesh → guaranteed-printable-STL. This is a genuinely hard, still-open problem — our local app should treat mesh repair/print-validation as a first-class pipeline stage to build deliberately, not a trivial post-processing afterthought, and should not assume any single generation model's raw output will be watertight.
 
 ### 5.4 Mesh repair building blocks available for a local pipeline
 
@@ -237,7 +237,7 @@ A reasonable local pipeline stage order: **generate mesh → decimate/remesh to 
 
 ---
 
-## 6. Summary Implications for messy_local
+## 6. Summary Implications for meshy_local
 
 1. **No shortcut model exists.** Even Meshy — with dedicated in-house R&D and a CEO with a computer-graphics PhD — has not fully solved reliable text→printable-mesh; expect our local version to need explicit, deliberate investment in the repair/validation stage, not just the generative stage.
 2. **The realistic local pipeline is multi-stage**, not a single model: text→image, image→3D reconstruction, then mesh cleanup — mirroring Meshy's own likely internal architecture.
@@ -296,7 +296,7 @@ A reasonable local pipeline stage order: **generate mesh → decimate/remesh to 
 
 ## 7. Deeper competitor/architecture research (2026-09-18): chasing the "secret sauce"
 
-Follow-up round, done after messy_local's own repair-stage deep-dive (voxel remesh, curvature-adaptive smoothing, detail-recovery snap, alpha-wrap rejection — see `CLAUDE.md`). Goal: find out, with real sourcing, whether Meshy/Tripo3D/Rodin/CSM.ai/Luma get their quality edge from (a) multi-view-consistent generation, (b) bigger/better reconstruction models, (c) documented post-processing tricks beyond what we've already tried, or (d) a structurally different mesh representation — and flag anything **confirmed** vs. **inferred/marketing**.
+Follow-up round, done after meshy_local's own repair-stage deep-dive (voxel remesh, curvature-adaptive smoothing, detail-recovery snap, alpha-wrap rejection — see `CLAUDE.md`). Goal: find out, with real sourcing, whether Meshy/Tripo3D/Rodin/CSM.ai/Luma get their quality edge from (a) multi-view-consistent generation, (b) bigger/better reconstruction models, (c) documented post-processing tricks beyond what we've already tried, or (d) a structurally different mesh representation — and flag anything **confirmed** vs. **inferred/marketing**.
 
 ### 7.1 Multi-view consistency: yes, this is real infrastructure the competitors use and we don't
 
@@ -376,7 +376,7 @@ This is the most direct answer to "is there a fundamentally different mesh repre
 ### Summary answer to the four research questions
 
 1. **Multi-view consistency**: real, confirmed, and genuinely the architectural piece we're missing relative to Rodin/Zero123++-style pipelines (§7.1). Zero123++ is the most plausible one to actually try porting to Mac.
-2. **Model/compute scale**: confirmed real and large (Hunyuan3D's 100K→87M-sample published progression, 10B-param shape models, $200M+ Tripo funding partly earmarked for compute) — but not a gap messy_local can close; correctly out of scope (§7.2).
+2. **Model/compute scale**: confirmed real and large (Hunyuan3D's 100K→87M-sample published progression, 10B-param shape models, $200M+ Tripo funding partly earmarked for compute) — but not a gap meshy_local can close; correctly out of scope (§7.2).
 3. **Post-processing secret sauce**: mostly not secret — no competitor discloses anything beyond generic auto-repair language, and the one real academic technique found (SEG/support-DPO) targets a different problem (support material, not wall thickness) than ours (§7.3–7.4).
 4. **Structural alternative**: FlexiCubes (already used by TRELLIS's and Hunyuan3D-2's own decoders, confirmed via source code/paper, not our current tier-3 marching-cubes approach) is the concrete, actionable finding; mesh-native autoregressive generation with by-construction manifoldness (Weaving Silk) is real but not yet production-scale (§7.3, §7.5).
 

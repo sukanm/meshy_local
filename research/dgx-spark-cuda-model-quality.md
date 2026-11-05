@@ -1,4 +1,4 @@
-# DGX Spark / CUDA Hardware: What Actually Changes for messy_local
+# DGX Spark / CUDA Hardware: What Actually Changes for meshy_local
 
 Research date: September 2026. Scope: if the user acquired one or two **NVIDIA DGX Spark** units (GB10 Grace Blackwell Superchip, 128GB unified LPDDR5x, NVLink-C2C, ConnectX-7 for pairing two units) instead of staying Mac/MLX-constrained, what actually gets better for the text→3D→STL pipeline? Companion to `local-text-to-3d-models-m4-max.md` (§5 in particular) and `meshy-ai-research.md` (§7) — this doc does not re-litigate the M4 Max survey, only what changes with CUDA + more memory available. Confirmed-vs-inferred flagged throughout, per this project's existing evidence bar. Not a printability-repair document — the Godzilla wall-thickness/thin-feature problem is a separate front and is only touched where a CUDA-only capability would plausibly help.
 
