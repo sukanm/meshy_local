@@ -7,6 +7,8 @@
 <script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js"></script>
 <style>
   :root { color-scheme: light dark; }
+  /* .row sets display:flex, which would otherwise override the hidden attribute */
+  [hidden] { display: none !important; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     max-width: 720px;
@@ -16,7 +18,7 @@
     color: CanvasText;
   }
   h1 { font-size: 1.3rem; }
-  textarea, input[type="number"] {
+  textarea, input[type="number"], input[type="url"], input[type="search"] {
     width: 100%;
     box-sizing: border-box;
     font: inherit;
@@ -63,7 +65,84 @@
   .PRINT_READY_WITH_WARNINGS { color: #b8860b; }
   .NEEDS_MANUAL_REPAIR { color: #b00020; }
   #error { color: #b00020; margin-top: 1rem; }
-  #download { display: none; margin-top: 1rem; }
+  #actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 1rem; }
+  a.button {
+    display: inline-block;
+    padding: 0.6rem 1.2rem;
+    border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
+    border-radius: 4px;
+    color: inherit;
+    text-decoration: none;
+  }
+  a.button[hidden] { display: none; }
+  .toggle { display: flex; gap: 0.25rem; margin-top: 0.5rem; }
+  .toggle button { font-size: 0.85rem; padding: 0.35rem 0.75rem; }
+  .toggle button.active { font-weight: 600; outline: 2px solid color-mix(in srgb, CanvasText 50%, transparent); }
+  .muted { font-size: 0.85rem; opacity: 0.7; }
+  .warn { color: #b8860b; }
+  #slice { margin-top: 1rem; }
+  #slice h3 { margin: 0 0 0.5rem; font-size: 1rem; }
+  #slice p { margin: 0.25rem 0; }
+  #previews { margin-top: 1rem; }
+  #previews h3 { margin: 0 0 0.5rem; font-size: 1rem; }
+  .preview-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 0.5rem;
+  }
+  .preview-grid figure { margin: 0; }
+  .preview-grid img {
+    width: 100%;
+    display: block;
+    border-radius: 6px;
+    background: #111;
+  }
+  .preview-grid figcaption {
+    font-size: 0.8rem;
+    opacity: 0.7;
+    margin-top: 0.25rem;
+  }
+  .inline { display: flex; gap: 0.5rem; align-items: flex-start; }
+  .inline input { flex: 1; min-width: 0; }
+  .inline button { white-space: nowrap; }
+  label.button {
+    display: inline-block;
+    font-size: 1rem;
+    opacity: 1;
+    padding: 0.6rem 1.2rem;
+    margin: 0;
+    border: 1px solid color-mix(in srgb, CanvasText 30%, transparent);
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .ref-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.5rem;
+    margin-bottom: 0.75rem;
+  }
+  .ref-grid button {
+    padding: 0;
+    border: 2px solid transparent;
+    border-radius: 6px;
+    background: color-mix(in srgb, CanvasText 6%, transparent);
+    aspect-ratio: 1;
+    overflow: hidden;
+  }
+  .ref-grid button:hover, .ref-grid button:focus-visible { border-color: color-mix(in srgb, CanvasText 50%, transparent); }
+  .ref-grid button.loading { opacity: 0.5; }
+  .ref-grid img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .ref-selected { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 0.75rem; }
+  .ref-selected img, #inputImage img {
+    width: 120px; height: 120px; object-fit: contain;
+    border-radius: 6px; background: color-mix(in srgb, CanvasText 6%, transparent);
+  }
+  .ref-selected p { margin: 0 0 0.4rem; }
+  #inputImage { display: flex; gap: 0.75rem; align-items: center; margin-top: 0.75rem; }
+  @media (max-width: 480px) {
+    .preview-grid { grid-template-columns: 1fr; }
+    .ref-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  }
 </style>
 </head>
 <body>
@@ -85,6 +164,35 @@
       <input id="seed" type="number" placeholder="random" />
     </div>
   </div>
+
+  <details id="refPanel">
+    <summary>Reference image (optional) — use a real photo instead of generating one</summary>
+    <p class="slider-value">For specific products, characters or places the image model doesn't know. A single object on a plain background works best; the background is removed automatically. With a reference image the prompt is just the job's name.</p>
+    <div id="refSelected" class="ref-selected" hidden>
+      <img id="refSelectedImg" alt="Selected reference image" />
+      <div>
+        <p><strong>Using this image</strong></p>
+        <p id="refSelectedInfo" class="muted"></p>
+        <button type="button" id="refClear">Remove</button>
+      </div>
+    </div>
+    <label for="refQuery">Search the web</label>
+    <div class="inline">
+      <input id="refQuery" type="search" placeholder="defaults to the prompt" />
+      <button type="button" id="refSearch">Search</button>
+    </div>
+    <p id="refStatus" class="muted"></p>
+    <div id="refResults" class="ref-grid" hidden></div>
+    <label for="refUrl">…or paste an image link</label>
+    <div class="inline">
+      <input id="refUrl" type="url" placeholder="https://…/photo.jpg" />
+      <button type="button" id="refUseUrl">Use link</button>
+    </div>
+    <p style="margin: 0 0 0.5rem;">
+      <label class="button" for="refFile">Upload an image…</label>
+      <input id="refFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif,image/bmp,image/tiff" hidden />
+    </p>
+  </details>
 
   <details>
     <summary>Advanced options</summary>
@@ -115,6 +223,34 @@
       </div>
     </div>
     <p class="slider-value">Generates this many reconstructions with different seeds and keeps the cleanest one (by topology-defect count) — a real quality win found by direct testing (same source image, one seed had 87% of its surface below the wall-thickness floor, another had 22%), at the cost of roughly multiplying image-to-3D generation time. 1 disables this and generates once, the old behavior.</p>
+    <p class="slider-value"><strong>Print prep</strong></p>
+    <div class="row">
+      <div>
+        <label for="wallMode">Wall thickening</label>
+        <select id="wallMode">
+          <option value="auto" selected>Auto — 0.3mm only if walls are too thin (default)</option>
+          <option value="off">Off — keep original thickness</option>
+          <option value="custom">Custom offset</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" id="wallOffsetWrap" hidden>
+      <div style="max-width: 160px;">
+        <label for="wallOffset">Custom offset (mm)</label>
+        <input id="wallOffset" type="number" step="0.1" min="0.1" max="2" />
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <label for="baseMode">Base</label>
+        <select id="baseMode">
+          <option value="flatten" selected>Flatten bottom — small flat cut for bed adhesion</option>
+          <option value="plinth">Plinth — add a solid base under the model</option>
+          <option value="none">None</option>
+        </select>
+      </div>
+    </div>
+    <p class="slider-value">Thickening grows the whole surface outward by the offset, so every wall is at least 2× the offset thick. More offset = sturdier but blunter spikes: 0.3mm keeps points sharp and prints with Arachne walls; 0.6mm guarantees the full 1.2mm wall but rounds fine tips. Every job is also sliced in Bambu Studio (P2S, PLA, 0.12mm layers, Arachne walls, tree supports) — open the .3mf to print with those settings.</p>
   </details>
 
   <button id="generate">Generate</button>
@@ -124,11 +260,27 @@
   <div id="status" hidden>
     <div>Job: <code id="jobId"></code></div>
     <div>Status: <span id="jobStatus"></span> — <span id="stage"></span></div>
-    <model-viewer id="viewer" hidden camera-controls auto-rotate exposure="1"></model-viewer>
+    <div id="inputImage" hidden>
+      <img id="inputImageImg" alt="Image the 3D model is built from" />
+      <span id="inputImageCaption" class="muted"></span>
+    </div>
+    <model-viewer id="viewer" hidden camera-controls auto-rotate exposure="1" shadow-intensity="1"></model-viewer>
+    <div id="viewerToggle" class="toggle" hidden>
+      <button type="button" data-mode="printable" class="active">Printable model</button>
+      <button type="button" data-mode="raw">Raw generation (coloured, not printable)</button>
+    </div>
+    <p id="viewerCaption" class="muted" hidden></p>
+    <div id="actions" hidden>
+      <a id="download" class="button" href="#" download>Download STL</a>
+      <a id="download3mf" class="button" href="#" download hidden>Download Bambu project (.3mf)</a>
+      <button type="button" id="openBambu">Open in Bambu Studio</button>
+      <span id="openStatus" class="muted"></span>
+    </div>
+    <div id="slice" hidden></div>
     <div id="report"></div>
-    <a id="download" href="#" download>Download STL</a>
+    <div id="previews" hidden></div>
   </div>
 
-<script src="app.js"></script>
+<script src="app.js?v=ref1"></script>
 </body>
 </html>

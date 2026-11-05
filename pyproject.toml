@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+    "ddgs>=9.16",
     "einops==0.7.0",
     "fastapi>=0.141.1",
     "gpytoolbox>=0.3.0",
@@ -51,3 +52,5 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+# vendor/ has its own test suites that need their own environments.
+testpaths = ["tests"]

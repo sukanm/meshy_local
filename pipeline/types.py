@@ -85,6 +85,25 @@ class STLResult:
     repair_report: RepairReport
 
 
+@dataclass
+class SliceResult:
+    """Bambu Studio's verdict on the final STL. Filenames are relative to the
+    job directory. `error` is set (and the rest mostly None) when slicing
+    couldn't run or failed."""
+
+    project_file: str | None = None  # sliced .3mf, openable in Bambu Studio
+    print_time_s: float | None = None
+    filament_g: float | None = None
+    layer_height_mm: float | None = None
+    settings_summary: str = ""
+    warnings: list[str] = field(default_factory=list)
+    # Cross-section regions (spike tips, claws, ...) sampled through the
+    # model's height, and how many of them the G-code prints no plastic for.
+    features_total: int | None = None
+    features_uncovered: int | None = None
+    error: str | None = None
+
+
 class JobStatus(str, Enum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
@@ -106,5 +125,22 @@ class Job:
     generated_image_path: Path | None = None
     raw_mesh_path: Path | None = None
     stl_path: Path | None = None
+    # Filenames relative to the job directory (not absolute paths — absolute
+    # paths in job.json broke after the project folder was renamed).
+    preview_images: list[str] = field(default_factory=list)
     repair_report: RepairReport | None = None
+    # GLB of the final printable mesh for the in-browser viewer (model-viewer
+    # only reads glTF); the raw generation is still raw_mesh.glb.
+    viewer_model: str | None = None
+    slice_result: SliceResult | None = None
     error: str | None = None
+
+
+def derive_status(is_watertight: bool, issues: list[Issue]) -> PrintReadinessStatus:
+    """Single source of truth for the overall readiness verdict, used by every
+    stage that (re)builds a RepairReport."""
+    if not is_watertight or any(i.severity == Severity.BLOCKING for i in issues):
+        return PrintReadinessStatus.NEEDS_MANUAL_REPAIR
+    if issues:
+        return PrintReadinessStatus.PRINT_READY_WITH_WARNINGS
+    return PrintReadinessStatus.PRINT_READY

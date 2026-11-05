@@ -1,0 +1,17 @@
+# Main project environment (conda). Create with:
+#   conda env create -f environment.yml
+#   conda env config vars set PYTHONNOUSERSITE=1 -n meshy_local   # keep ~/.local packages out
+#   conda activate meshy_local
+#   pip install --pre torch==2.15.0.dev20260915 torchvision==0.30.0.dev20260916 \
+#       --index-url https://download.pytorch.org/whl/nightly/cpu
+#   pip install -r requirements.txt
+#   pip install --no-build-isolation -e vendor/stable-fast-3d/texture_baker \
+#       -e vendor/stable-fast-3d/uv_unwrapper
+# torch is a nightly (SF3D needs it for MPS) and the two SF3D extensions compile
+# against it, so they're installed in that order rather than listed here.
+name: meshy_local
+channels:
+  - defaults
+dependencies:
+  - python=3.12
+  - pip

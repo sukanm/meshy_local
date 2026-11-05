@@ -70,3 +70,51 @@ def estimate_min_wall_thickness_mm(
     fraction_below = float((thicknesses_mm < floor_mm).mean())
     fraction_critical = float((thicknesses_mm < critical_mm).mean()) if critical_mm is not None else None
     return min_thickness, fraction_below, fraction_critical
+
+
+def thin_wall_issue(
+    below_floor_fraction: float | None,
+    critical_fraction: float | None,
+    advice: str,
+):
+    """Builds the tiered `thin_walls` WARNING (or None if under threshold).
+
+    Shared by the repair stage (first measurement) and the print-prep stage
+    (re-measurement after any wall offset), so both report identically.
+    `advice` is the closing sentence, since what the user can do about it
+    differs by stage (e.g. "thickening was off" vs. "still thin after a
+    0.6mm offset").
+    """
+    from pipeline import config
+    from pipeline.types import Issue, Severity
+
+    if below_floor_fraction is None or below_floor_fraction <= config.WALL_THICKNESS_WARNING_FRACTION:
+        return None
+    # Tiered, not a single number: a knife-edge point (likely an actual
+    # gap/hole once sliced) and a wall that's uniformly 0.9mm (printable as a
+    # fragile 1-2 perimeter wall) are genuinely different severities. See
+    # config.WALL_THICKNESS_CRITICAL_MM for where the line is.
+    fragile_fraction = below_floor_fraction - (critical_fraction or 0.0)
+    if critical_fraction and critical_fraction > config.WALL_THICKNESS_WARNING_FRACTION:
+        breakdown = (
+            f"{critical_fraction * 100:.1f}% is below even one nozzle width "
+            f"({config.WALL_THICKNESS_CRITICAL_MM}mm) — likely to come out as actual "
+            f"gaps/holes once sliced, not just a fragile wall. The remaining "
+            f"{fragile_fraction * 100:.1f}% should still print as a thin (1-2 perimeter) "
+            "but present wall."
+        )
+    else:
+        breakdown = (
+            "None of this is below one nozzle width, so it should still print as a "
+            "thin (1-2 perimeter) wall rather than an outright gap — just not the fully "
+            "robust 3-perimeter thickness."
+        )
+    return Issue(
+        code="thin_walls",
+        message=(
+            f"{below_floor_fraction * 100:.1f}% of sampled surface points have "
+            f"estimated wall thickness below the {config.FDM_MIN_WALL_THICKNESS_MM}mm "
+            f"FDM floor. {breakdown} {advice}"
+        ),
+        severity=Severity.WARNING,
+    )

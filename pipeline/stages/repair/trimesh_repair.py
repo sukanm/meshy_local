@@ -75,8 +75,12 @@ import numpy as np
 import trimesh
 
 from pipeline import config
-from pipeline.stages.repair.thickness import estimate_min_wall_thickness_mm
-from pipeline.types import Issue, PrintReadyMesh, PrintReadinessStatus, RawMesh, RepairReport, Severity
+from pipeline.stages.repair.thickness import estimate_min_wall_thickness_mm, thin_wall_issue
+from pipeline.types import Issue, PrintReadyMesh, RawMesh, RepairReport, Severity, derive_status
+
+GLTF_SUFFIXES = {".glb", ".gltf"}
+# Rotation of +90 degrees about X: (x, y, z) -> (x, -z, y).
+Y_UP_TO_Z_UP = trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0])
 
 
 def _baseline_repair(mesh: trimesh.Trimesh) -> None:
@@ -231,6 +235,29 @@ def _vertices_near_mask(vertices: np.ndarray, transform: np.ndarray, mask: np.nd
     return result
 
 
+def _solid_fill(surface: np.ndarray, seal_voxels: int) -> np.ndarray:
+    """Solid interior of a voxelized surface that may have holes.
+
+    `VoxelGrid.fill()` only fills cavities the surface fully encloses, so on a
+    leaky surface (every raw TRELLIS.2 mesh) it fills nothing and the result
+    is a hollow shell. Here the surface is first dilated by `seal_voxels` to
+    close small holes, everything the outside can't reach is taken as solid,
+    and that solid is eroded back by the same amount (a morphological
+    closing), so the outer boundary stays where it was.
+    """
+    from scipy import ndimage
+
+    k = int(seal_voxels)
+    if k <= 0:
+        return ndimage.binary_fill_holes(surface)
+    padded = np.pad(surface, k + 1)
+    sealed = ndimage.binary_dilation(padded, iterations=k)
+    outside = ~ndimage.binary_fill_holes(sealed)
+    solid = ~ndimage.binary_dilation(outside, iterations=k)
+    solid |= padded
+    return solid[k + 1 : -(k + 1), k + 1 : -(k + 1), k + 1 : -(k + 1)]
+
+
 def _voxel_remesh(
     mesh: trimesh.Trimesh,
     reference: trimesh.Trimesh | None = None,
@@ -266,7 +293,10 @@ def _voxel_remesh(
     """
     extent = mesh.bounds[1] - mesh.bounds[0]
     pitch = extent.max() / resolution
-    vox = mesh.voxelized(pitch=pitch).fill()
+    surface = mesh.voxelized(pitch=pitch)
+    vox = trimesh.voxel.VoxelGrid(
+        _solid_fill(surface.matrix, config.VOXEL_FILL_SEAL_VOXELS), transform=surface.transform
+    )
 
     added_mask = None
     thickened_fraction = 0.0
@@ -405,7 +435,7 @@ def _voxel_remesh(
     return remeshed, detail_recovered, thickened_fraction
 
 
-def _remove_small_floaters(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, int, float]:
+def remove_small_floaters(mesh: trimesh.Trimesh) -> tuple[trimesh.Trimesh, int, float]:
     """Drops only shells that are small relative to total volume (generation
     noise), keeping every substantial shell — including a deliberately
     hollow object's inner cavity wall, which is topologically a *separate*
@@ -484,8 +514,19 @@ class TrimeshRepairStage:
         # counts, leaving those stale arrays mismatched and crashing export.
         # We only need geometry through this pipeline, never carry them.
         m = trimesh.Trimesh(vertices=loaded.vertices, faces=loaded.faces, process=False)
-
         actions: list[str] = []
+        axis_actions = 0
+        if mesh.mesh_path.suffix.lower() in GLTF_SUFFIXES:
+            # glTF is Y-up by spec; STL/slicers are Z-up. Without this the
+            # exported STL lies on its side in Bambu Studio (found 2026-11-03:
+            # every TRELLIS.2 subject checked — owl, cat, robot, Godzilla —
+            # was tallest along Y, and Godzilla's STL stood on its tail tip).
+            # +90 deg about X maps Y->Z and glTF's front (+Z) to -Y, which is
+            # the side facing the viewer in Bambu Studio's default view.
+            m.apply_transform(Y_UP_TO_Z_UP)
+            actions.append("Converted glTF Y-up axes to the slicer's Z-up convention")
+            axis_actions = 1
+
         issues: list[Issue] = []
 
         _baseline_repair(m)
@@ -564,7 +605,7 @@ class TrimeshRepairStage:
         # Multi-shell handling: auto-keep largest shell, always disclosed
         # (changes the object, even though small floaters are near-certainly
         # generation noise for this MVP's single-object scope).
-        m, num_discarded, discarded_fraction = _remove_small_floaters(m)
+        m, num_discarded, discarded_fraction = remove_small_floaters(m)
         if num_discarded > 0:
             actions.append(
                 f"Removed {num_discarded} disconnected fragment(s) "
@@ -607,43 +648,16 @@ class TrimeshRepairStage:
                 floor_mm=config.FDM_MIN_WALL_THICKNESS_MM,
                 critical_mm=config.WALL_THICKNESS_CRITICAL_MM,
             )
-            if (
-                below_floor_fraction is not None
-                and below_floor_fraction > config.WALL_THICKNESS_WARNING_FRACTION
-            ):
-                # Tiered, not a single number: a knife-edge point (likely an
-                # actual gap/hole once sliced) and a wall that's uniformly
-                # 0.9mm (printable as a fragile 1-2 perimeter wall, just not
-                # the robust 3-perimeter floor) used to get an identical
-                # message — genuinely different severities in practice. See
-                # config.WALL_THICKNESS_CRITICAL_MM for where the line is.
-                fragile_fraction = below_floor_fraction - (critical_fraction or 0.0)
-                if critical_fraction and critical_fraction > config.WALL_THICKNESS_WARNING_FRACTION:
-                    breakdown = (
-                        f"{critical_fraction * 100:.1f}% is below even one nozzle width "
-                        f"({config.WALL_THICKNESS_CRITICAL_MM}mm) — likely to come out as actual "
-                        f"gaps/holes once sliced, not just a fragile wall. The remaining "
-                        f"{fragile_fraction * 100:.1f}% should still print as a thin (1-2 perimeter) "
-                        "but present wall."
-                    )
-                else:
-                    breakdown = (
-                        "None of this is below one nozzle width, so it should still print as a "
-                        "thin (1-2 perimeter) wall rather than an outright gap — just not the fully "
-                        "robust 3-perimeter thickness."
-                    )
-                issues.append(
-                    Issue(
-                        code="thin_walls",
-                        message=(
-                            f"{below_floor_fraction * 100:.1f}% of sampled surface points have "
-                            f"estimated wall thickness below the {config.FDM_MIN_WALL_THICKNESS_MM}mm "
-                            f"FDM floor. {breakdown} Not auto-fixed — thickening geometry changes the "
-                            "design. Consider a thicker prompt/scale, or manual repair in a slicer/CAD tool."
-                        ),
-                        severity=Severity.WARNING,
-                    )
-                )
+            thin_issue = thin_wall_issue(
+                below_floor_fraction,
+                critical_fraction,
+                advice=(
+                    "The print-prep stage's wall offset (auto by default) addresses this by "
+                    "thickening the whole surface; see its result below."
+                ),
+            )
+            if thin_issue is not None:
+                issues.append(thin_issue)
 
         # Build-volume check against the target printer (flag only — never
         # silently resize past what the user explicitly requested).
@@ -665,16 +679,13 @@ class TrimeshRepairStage:
             )
 
         # Overall status.
-        if not is_watertight or any(i.severity == Severity.BLOCKING for i in issues):
-            status = PrintReadinessStatus.NEEDS_MANUAL_REPAIR
-        elif issues:
-            status = PrintReadinessStatus.PRINT_READY_WITH_WARNINGS
-        else:
-            status = PrintReadinessStatus.PRINT_READY
+        status = derive_status(is_watertight, issues)
 
         report = RepairReport(
             is_watertight=is_watertight,
-            was_repaired=len(actions) > 1,  # baseline repair always runs; >1 means escalation happened
+            # baseline repair always runs; >1 means escalation happened (the
+            # axis-conversion note is bookkeeping, not a repair, so excluded)
+            was_repaired=len(actions) - axis_actions > 1,
             actions_taken=actions,
             remaining_issues=issues,
             min_wall_thickness_mm=min_thickness_mm,

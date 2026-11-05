@@ -36,7 +36,7 @@ def main() -> None:
 
     source_dir = config.OUTPUT_DIR / args.source_job_id
     source_job = json.loads((source_dir / "job.json").read_text())
-    raw_mesh_path = Path(source_job["raw_mesh_path"])
+    raw_mesh_path = source_dir / Path(source_job["raw_mesh_path"]).name  # by filename: job.json holds absolute paths, which went stale when the project folder was renamed
     if not raw_mesh_path.exists():
         raise SystemExit(f"raw mesh not found: {raw_mesh_path}")
 

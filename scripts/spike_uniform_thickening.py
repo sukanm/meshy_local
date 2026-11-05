@@ -26,6 +26,7 @@ import json
 
 import numpy as np
 import trimesh
+from pathlib import Path
 from scipy import ndimage
 
 from pipeline import config
@@ -44,7 +45,7 @@ def main() -> None:
 
     job_dir = config.OUTPUT_DIR / args.job_id
     job = json.loads((job_dir / "job.json").read_text())
-    raw_mesh_path = job["raw_mesh_path"]
+    raw_mesh_path = job_dir / Path(job["raw_mesh_path"]).name  # by filename: job.json holds absolute paths, which went stale when the project folder was renamed
     target_mm = args.scale or job["target_longest_dimension_mm"]
 
     loaded = trimesh.load(raw_mesh_path, force="mesh")

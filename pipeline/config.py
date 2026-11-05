@@ -189,6 +189,18 @@ DETAIL_SNAP_MIN_REFERENCE_FACES = 100
 VOXEL_REMESH_MAX_FACES_BEFORE_SIMPLIFY = 700_000
 VOXEL_REMESH_SIMPLIFY_TARGET_FACES = 250_000
 
+# Tier-3 interior fill. The voxelized surface of a raw TRELLIS.2 mesh is never
+# sealed (it has thousands of small holes), so a plain cavity fill leaves the
+# interior empty and marching cubes produces a hollow, near-zero-thickness
+# double skin (measured 2026-11-04: 0.01-0.06mm walls around an empty torso,
+# 2,069mm3 instead of ~14,100mm3). Sealing the surface by this many voxels
+# before flood-filling from outside tolerates holes up to ~2x this wide; the
+# solid is then eroded back by the same amount, so the outer surface doesn't
+# grow. Volume is stable from 2 to 4 (14.1k -> 14.3k mm3 on Godzilla), so the
+# exact value isn't sensitive. Side effect: concave gaps narrower than ~2x
+# this between separate features also get filled.
+VOXEL_FILL_SEAL_VOXELS = 2
+
 # Threshold (as a multiple of the mesh's own median edge length) for
 # detecting degenerate "sliver" triangles introduced by PyMeshLab's
 # decimation — see mesh_topology.find_sliver_edges for the full incident
@@ -347,3 +359,154 @@ IMAGE_GEN_PROMPT_SUFFIX = (
 # win and tripling generation time (~3.5-4min -> ~10-12min per job); still
 # overridable per-request (CLI --candidates, web UI control).
 TRELLIS2_NUM_CANDIDATES = 3
+
+# --- Blender integration (2026-11-03) ---------------------------------------
+# Blender 5.2 is used headlessly (`blender -b --python ...`, subprocess — same
+# isolation pattern as mflux/TRELLIS.2) for three things its bundled Python
+# provides and this venv doesn't: OpenVDB signed-distance-field ops (the wall
+# offset), the Manifold boolean solver (base flatten/plinth), and fast
+# headless rendering (previews). Every Blender-backed step degrades to a
+# disclosed WARNING, never a failed job, if Blender is missing or errors.
+# Override the path with the MESHY_BLENDER environment variable.
+BLENDER_EXECUTABLE = "/Applications/Blender.app/Contents/MacOS/Blender"
+BLENDER_TIMEOUT_S = 300
+
+# --- Print-prep stage: wall offset (OpenVDB, via Blender) -------------------
+# Physically motivated, not theoretical: the first real P2S print of this
+# project (job eeaae724ce2b, Godzilla, 80mm) failed by layer separation, with
+# ~80% of its surface below one nozzle width. A uniform outward SDF offset
+# of r guarantees every wall is at least 2r thick (a zero-thickness sheet
+# becomes 2r), so r = FDM_MIN_WALL_THICKNESS_MM / 2 meets the robust floor.
+# Measured on that Godzilla (rebuilt with the post-sliver-fix repair code):
+# below-floor 92.5% -> 1.0%, below-nozzle 80.0% -> 0.2%, volume 709 -> 7,696
+# mm^3, ~1s. That volume growth is close to the theoretical maximum for a
+# 0.6mm offset (surface area x offset ~= 8,100 mm^3) — i.e. the honest
+# physical cost on a model this thin, not an algorithm artifact. (CGAL alpha
+# wrap at the same offset gave 14,994 mm^3, ~2x over that bound: it also
+# bridges gaps between nearby features.)
+# Auto offset 0.3mm (walls >= 0.6mm, i.e. 1.5 nozzle widths, which Arachne
+# prints), changed from 0.6mm (= floor/2) on 2026-11-04. The 0.6mm default
+# was chosen while every TRELLIS.2 mesh was secretly a hollow double skin
+# (see VOXEL_FILL_SEAL_VOXELS); with solid interiors, only real spike tips are
+# thin, and 0.6mm visibly blunted them. Bambu Studio's own slice of the fixed
+# Godzilla (full-height check, supports, Arachne): 0.3mm left 39 of 260 small
+# cross-sections unprinted vs 4 of 207 at 0.6mm and 65 of 280 with no offset,
+# and kept the spikes pointed.
+WALL_OFFSET_AUTO_MM = 0.3
+# "Auto" mode applies WALL_OFFSET_AUTO_MM only when the repair stage's
+# below-one-nozzle-width fraction exceeds this — i.e. walls likely to print
+# as gaps, not merely fragile ones. Explicit 0 disables; an explicit value
+# always applies.
+WALL_OFFSET_AUTO_TRIGGER_CRITICAL_FRACTION = WALL_THICKNESS_WARNING_FRACTION
+# OpenVDB voxel size scales with print size (the SDF's surface accuracy is a
+# small fraction of a voxel, and output face count grows with area/voxel^2):
+# 0.1mm at <=80mm prints, coarsening to 0.3mm by 240mm.
+WALL_OFFSET_MIN_VOXEL_MM = 0.1
+WALL_OFFSET_MAX_VOXEL_MM = 0.3
+WALL_OFFSET_VOXELS_PER_LONGEST_DIM = 800
+# OpenVDB meshing adaptivity (0 = uniform triangles; higher merges triangles
+# on flat regions). 0.3 roughly halves face count vs. 0 with sub-voxel error.
+WALL_OFFSET_ADAPTIVITY = 0.3
+
+
+def wall_offset_voxel_mm(longest_dimension_mm: float) -> float:
+    """OpenVDB voxel size for the wall offset at a given print size."""
+    v = longest_dimension_mm / WALL_OFFSET_VOXELS_PER_LONGEST_DIM
+    return max(WALL_OFFSET_MIN_VOXEL_MM, min(WALL_OFFSET_MAX_VOXEL_MM, v))
+
+
+# --- Print-prep stage: base (Manifold boolean, via Blender) ------------------
+# "flatten": slice a thin layer off the lowest point so the model sits on a
+# flat contact patch instead of a point/edge (bed adhesion). "plinth": union
+# a solid elliptical disc under the model's footprint. "none": leave as is.
+BASE_MODE_DEFAULT = "flatten"
+BASE_MODES = ("flatten", "plinth", "none")
+# Two 0.2mm layers: enough to create a real first-layer footprint, small
+# enough to be visually negligible.
+FLATTEN_BASE_DEPTH_MM = 0.4
+PLINTH_THICKNESS_MM = 2.4
+# How far the model sinks into the plinth top, so the union genuinely fuses
+# (feet/tail tips) rather than merely touching at a tangent.
+PLINTH_EMBED_MM = 0.8
+# Plinth extends this far beyond the model's XY footprint on each side.
+PLINTH_MARGIN_MM = 3.0
+
+# --- Preview stage (headless Blender render of the final STL) ---------------
+PREVIEW_RESOLUTION_PX = 768
+# (name, azimuth degrees from front, elevation degrees). Front = looking
+# along +Y, i.e. the side facing the viewer in Bambu Studio's default view.
+PREVIEW_VIEWS = (
+    ("front", 0, 10),
+    ("side", 90, 10),
+    ("back", 180, 10),
+    ("three_quarter", 45, 30),
+)
+
+
+# --- Slice stage: Bambu Studio CLI (added 2026-11-04) -----------------------
+# Headless `BambuStudio --slice` with the P2S system profiles. Produces a
+# sliced .3mf project the user can open/print from Bambu Studio, the
+# slicer's own time/filament estimate, and a real-slicer check of which
+# small features get no plastic at all. Best-effort, like preview: a missing
+# Bambu Studio or a failed slice is reported, never fails the job.
+# Override the executable with the MESHY_BAMBU_STUDIO environment variable.
+BAMBU_STUDIO_EXECUTABLE = "/Applications/BambuStudio.app/Contents/MacOS/BambuStudio"
+BAMBU_STUDIO_APP_NAME = "BambuStudio"  # for `open -a`
+# System profiles live here; the CLI does NOT resolve their `inherits` chains
+# itself (it silently falls back to defaults such as 0.2mm layers), so the
+# slice stage flattens each chain into one JSON before passing it in.
+BAMBU_PROFILE_DIR = Path.home() / "Library/Application Support/BambuStudio/system/BBL"
+BAMBU_MACHINE_PROFILE = "Bambu Lab P2S 0.4 nozzle"
+BAMBU_PROCESS_PROFILE = "0.12mm High Quality @BBL P2S"
+BAMBU_FILAMENT_PROFILE = "Bambu PLA Basic @BBL P2S"
+# Bambu's P2S profiles default to the classic wall generator, which drops any
+# feature narrower than one line width (spike tips vanish); Arachne varies the
+# line width to print them. Supports: arms/jaws/tails of figurines overhang.
+# min_feature_size / min_bead_width (Arachne's defaults: 25% / 85% of the
+# nozzle) set how narrow a feature Arachne still prints and how thin a line it
+# may lay. Lowered for spiky figurines: on the 0.3mm Godzilla (7b03f950890b)
+# unprinted features fell 39/260 -> 12/260 at the same print time (87 -> 88
+# min) and filament (11.0 -> 11.1 g); going lower (5% / 35%) gained nothing.
+# A 0.2mm nozzle does a bit better (8/257) but doubles print time (175 min)
+# and needs a nozzle swap, so it isn't the default.
+BAMBU_PROCESS_OVERRIDES = {
+    "wall_generator": "arachne",
+    "min_feature_size": "10%",
+    "min_bead_width": "50%",
+    "enable_support": "1",
+    "support_type": "tree(auto)",
+}
+BAMBU_SLICE_TIMEOUT_S = 900
+# Unprinted-feature check: compare the model's cross-section with the
+# G-code's extrusion paths every SLICE_CHECK_STEP_MM of height, rasterised at
+# SLICE_CHECK_PIXEL_MM. A "feature" is one connected region of a
+# cross-section (a spike tip, a claw, the torso) of at least
+# SLICE_CHECK_MIN_FEATURE_MM2; it counts as unprinted when extrusion covers
+# less than SLICE_CHECK_COVERED_FRACTION of it.
+SLICE_CHECK_STEP_MM = 1.0
+SLICE_CHECK_PIXEL_MM = 0.05
+SLICE_CHECK_MIN_FEATURE_MM2 = 0.02
+SLICE_CHECK_COVERED_FRACTION = 0.05
+# Warn above this fraction of unprinted features. Godzilla at 80mm (full
+# height, supports on, Arachne): 23% with no offset, 15% at 0.3mm, 2% at 0.6mm
+# — the 0.3mm version was judged good in Bambu Studio's preview, so 0.3mm
+# shouldn't warn but an un-thickened spiky model should.
+SLICE_CHECK_WARN_FRACTION = 0.20
+
+# --- Reference images (web search / upload / link) ---------------------------
+# A real photo can stand in for the generated concept image: both image-to-3D
+# models are image-conditioned and remove the background themselves, so a
+# photo of a specific product/character the image model doesn't know goes
+# straight into reconstruction.
+REFERENCE_IMAGE_DIR = OUTPUT_DIR / "_references"  # staged picks, before a job exists
+REFERENCE_IMAGE_MAX_BYTES = 25 * 1024 * 1024
+REFERENCE_IMAGE_MIN_SIDE_PX = 256  # smaller reconstructs badly (TRELLIS.2 conditions at 512px)
+REFERENCE_IMAGE_MAX_SIDE_PX = 1024  # larger is wasted work; both models downscale
+REFERENCE_IMAGE_TIMEOUT_S = 20
+IMAGE_SEARCH_MAX_RESULTS = 12
+# Search provider: Brave's official API when a key is set (free tier at
+# api-dashboard.search.brave.com), otherwise DuckDuckGo via the `ddgs` package
+# (no account; unofficial, so it can break), then Openverse (openly licensed
+# images only) as a last resort.
+BRAVE_SEARCH_API_KEY_ENV = "BRAVE_SEARCH_API_KEY"
+IMAGE_SEARCH_USER_AGENT = "meshy_local/0.1 (personal 3D-printing tool)"
