@@ -38,3 +38,6 @@ output/*
 # Editors
 .vscode/
 .idea/
+
+# Optional Pixal3D port: cloned by scripts/setup_pixal3d.sh, not vendored
+vendor/pixal3d-mlx/

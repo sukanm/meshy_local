@@ -24,11 +24,13 @@ from fastapi.concurrency import run_in_threadpool  # noqa: E402
 from fastapi.responses import FileResponse  # noqa: E402
 from fastapi.staticfiles import StaticFiles  # noqa: E402
 
-from pipeline import config, reference_images  # noqa: E402
+from pipeline import concepts, config, job_history, reference_images  # noqa: E402
 from pipeline.cli import build_default_pipeline  # noqa: E402
 from pipeline.orchestrator import Pipeline  # noqa: E402
 from pipeline.types import TextPrompt  # noqa: E402
 from server.schemas import (  # noqa: E402
+    ConceptRequest,
+    ConceptResponse,
     GenerateRequest,
     GenerateResponse,
     ReferenceImageResponse,
@@ -59,8 +61,24 @@ async def _revalidate_page_files(request, call_next):
 # reason to pay that cost at server startup if the user never asks for it.
 _pipelines: dict[str, Pipeline] = {}
 _pipelines_lock = threading.Lock()
+# One heavy job at a time: a 3D generation or a concept image. Both use most of
+# the GPU/unified memory, and TRELLIS.2 already swaps on heavy subjects.
 _job_lock = threading.Lock()
 _job_running = False
+
+
+def _claim_worker(detail: str) -> None:
+    global _job_running
+    with _job_lock:
+        if _job_running:
+            raise HTTPException(status_code=409, detail=detail)
+        _job_running = True
+
+
+def _release_worker() -> None:
+    global _job_running
+    with _job_lock:
+        _job_running = False
 
 
 @app.on_event("startup")
@@ -90,7 +108,6 @@ def _run_job(
     reference_image: Path | None,
     reference_source: dict | None,
 ) -> None:
-    global _job_running
     try:
         # Built here, inside the background thread, not in the request
         # handler: a first-time SF3D load takes minutes, and the HTTP
@@ -109,13 +126,11 @@ def _run_job(
             reference_source=reference_source,
         )
     finally:
-        with _job_lock:
-            _job_running = False
+        _release_worker()
 
 
 @app.post("/generate")
 def generate(req: GenerateRequest) -> GenerateResponse:
-    global _job_running
     reference_image = reference_source = None
     if req.reference_image_id:
         try:
@@ -123,13 +138,7 @@ def generate(req: GenerateRequest) -> GenerateResponse:
         except reference_images.ReferenceImageError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
     label = req.prompt.strip() or (reference_source or {}).get("title") or "reference image"
-    with _job_lock:
-        if _job_running:
-            raise HTTPException(
-                status_code=409,
-                detail="A generation job is already running (MVP is single-job-at-a-time). Wait for it to finish.",
-            )
-        _job_running = True
+    _claim_worker("Another job or concept image is still running (one at a time). Wait for it to finish.")
 
     job_id = uuid.uuid4().hex[:12]
     job_dir = config.OUTPUT_DIR / job_id
@@ -176,6 +185,26 @@ def generate(req: GenerateRequest) -> GenerateResponse:
     thread.start()
 
     return GenerateResponse(job_id=job_id)
+
+
+@app.post("/concept")
+def concept(req: ConceptRequest) -> ConceptResponse:
+    """Makes one concept image (~40s) and stages it like a reference image;
+    the UI calls this once per image so each shows as soon as it's ready."""
+    _claim_worker("A 3D job or another concept image is running. Wait for it to finish.")
+    try:
+        text_to_image = _get_pipeline("trellis2").text_to_image
+        ref_id, seed = concepts.make_concept(text_to_image, req.prompt.strip(), req.seed)
+    except (RuntimeError, reference_images.ReferenceImageError) as exc:
+        raise HTTPException(status_code=500, detail=f"Concept image failed: {exc}") from exc
+    finally:
+        _release_worker()
+    return ConceptResponse(**_reference_response(ref_id).model_dump(), seed=seed)
+
+
+@app.get("/jobs")
+def jobs(limit: int = 500) -> dict:
+    return {"jobs": job_history.list_jobs(limit=max(1, min(limit, 2000)))}
 
 
 @app.get("/status/{job_id}")
@@ -285,6 +314,7 @@ def defaults() -> dict:
         "num_candidates": config.TRELLIS2_NUM_CANDIDATES,
         "wall_offset_auto_mm": config.WALL_OFFSET_AUTO_MM,
         "base_mode": config.BASE_MODE_DEFAULT,
+        "concept_batch_size": config.CONCEPT_BATCH_SIZE,
     }
 
 

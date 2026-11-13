@@ -36,7 +36,7 @@ A job runs these stages in order. Each stage is a swappable `Protocol` in `pipel
 | # | Stage | What it does | Tool |
 |---|---|---|---|
 | 1 | **Text → image** | Generates a concept image from the prompt. Skipped when you supply a [reference image](#reference-images-and-web-search). | [mflux](https://github.com/filipstrand/mflux) Z-Image Turbo (MLX) |
-| 2 | **Image → 3D** | Cuts the object out of the image ([BiRefNet](https://github.com/ZhengPeng7/BiRefNet), as in the official TRELLIS.2), then reconstructs a textured mesh. By default it makes 3 candidates and keeps the cleanest. | [TRELLIS.2](https://github.com/microsoft/TRELLIS) (vendored MLX port), or [Stable Fast 3D](https://github.com/Stability-AI/stable-fast-3d) |
+| 2 | **Image → 3D** | Cuts the object out of the image ([BiRefNet](https://github.com/ZhengPeng7/BiRefNet), as in the official TRELLIS.2), then reconstructs a textured mesh. By default it makes 3 candidates and keeps the cleanest. | [TRELLIS.2](https://github.com/microsoft/TRELLIS) (vendored MLX port), or optionally [Pixal3D](https://github.com/TencentARC/Pixal3D) or [Stable Fast 3D](https://github.com/Stability-AI/stable-fast-3d) |
 | 3 | **Repair** | Makes the mesh watertight and manifold, scales it to your size, and stands it upright (Z-up). Measures wall thickness. | trimesh, PyMeshLab, scikit-image |
 | 4 | **Print prep** | Thickens walls by a uniform outward offset where they're too thin to print, flattens the bottom (or adds a plinth), and places the model on the plate. | Blender (headless): OpenVDB and the Manifold boolean |
 | 5 | **Export** | Writes the STL, then checks its topology again the way a slicer reads it. | trimesh |
@@ -110,6 +110,12 @@ If you pre-download them, download those revisions, not `main`.
 The first TRELLIS.2 job also downloads the BiRefNet background-removal model (973MB, from
 rembg's GitHub releases) into `~/.rembg/models/`.
 
+**Optional: Pixal3D.** `scripts/setup_pixal3d.sh` clones the
+[pixal3d-mlx](https://github.com/lyonsno/pixal3d-mlx) port into `vendor/pixal3d-mlx/` (not
+committed), creates the conda env `pixal3d`, and downloads about 44GB of weights. Two of them
+ship as PyTorch pickles, so the script converts them to safetensors without running pickled
+code. Pixal3D also reuses TRELLIS.2's `TRELLIS-image-large` and DINOv3 downloads.
+
 ## Using the web UI
 
 ```bash
@@ -124,13 +130,23 @@ Open <http://127.0.0.1:8420>.
    an image link, or upload a file. The 3D model is then built from that photo instead of a
    generated image. See [Reference images](#reference-images-and-web-search).
 3. **Optional: open *Advanced options*:**
-   - image-to-3D model (TRELLIS.2 or SF3D) and number of candidates;
+   - image-to-3D model (TRELLIS.2, Pixal3D or SF3D) and number of candidates (picking
+     Pixal3D sets it to 1);
    - repair smoothing and detail;
    - wall thickening: auto, off or a custom offset;
    - base: flatten, plinth or none.
-4. **Press Generate.** The page polls every 5 seconds and shows the current stage. It also shows
+4. **Press *Make concept images*.** With *Show me concept images first* ticked (the default), the
+   page makes three concept images (~40s each) and shows each as it finishes. Click one to select it,
+   then **Build 3D from the selected image**; double-clicking an image builds it straight away.
+   *Make more* adds three more. With a seed set, the images use that seed, then the next ones in
+   turn; otherwise the seeds are random. Each image shows its seed. The concept image decides the
+   result more than any setting does: small loops, floating bits and painted-on detail come out
+   badly in 3D. Checking the image here costs ~40s; finding the problem in the finished model costs
+   the whole 12–40 min run. You can build another pick once the first finishes. Untick the box to go
+   straight from prompt to 3D, as before. A reference image always goes straight to 3D.
+5. **While it builds**, the page polls every 5 seconds and shows the current stage. It also shows
    the image the model is being built from and, once reconstruction finishes, the raw 3D model.
-5. **When the job is done** you get:
+6. **When the job is done** you get:
    - a 3D viewer of the **printable model**, with a toggle back to the raw coloured generation
      (which is *not* what prints);
    - the **Bambu Studio slice summary**: print time, filament, settings, and the unprinted-feature
@@ -139,8 +155,26 @@ Open <http://127.0.0.1:8420>.
    - four rendered previews of the final STL;
    - **Download STL**, **Download Bambu project (.3mf)** and **Open in Bambu Studio**.
 
-Reopen any job with `http://127.0.0.1:8420/?job=<job_id>`. Only one job runs at a time; a second
-Generate while one is running gets an error.
+Reopen any job with `http://127.0.0.1:8420/?job=<job_id>`. Only one heavy task runs at a time,
+whether a 3D job or a concept image. Starting another while one runs gets an error.
+
+### History and compare
+
+**History & compare** (top right, or `/history.html`) lists every job in `output/`, newest first.
+Each card shows the job's thumbnail, prompt, date, models and headline print numbers. You can
+filter by prompt or job id; click a thumbnail to reopen the job.
+
+Tick **Compare** on two to four jobs to see them side by side:
+- the input image;
+- four views of the final model (optionally the interactive 3D models);
+- unprinted features, and surface below 1.2mm and below nozzle width, with the best value in each
+  row marked green;
+- the result, wall thickening, base (including whether it was skipped), size, print time and
+  filament;
+- the image source, both models, seed and warnings.
+
+A comparison has its own link: `/history.html?compare=<id>,<id>`. Jobs from before 2026-11-05 don't
+record which models built them, so those rows are blank.
 
 ## Using the CLI
 
@@ -156,7 +190,7 @@ python -m pipeline.cli "Godzilla" --scale 80 --image https://example.com/godzill
 | `--scale <mm>` | Target longest dimension in mm (required). |
 | `--image <path or URL>` | Build from this photo instead of generating a concept image; the prompt becomes the job's name. |
 | `--seed <int>` | Seed for reproducible generation. |
-| `--image-model trellis2\|sf3d` | Image-to-3D backend (default `trellis2`). |
+| `--image-model trellis2\|pixal3d\|sf3d` | Image-to-3D backend (default `trellis2`). |
 | `--candidates <n>` | TRELLIS.2: make `n` reconstructions and keep the cleanest (default 3; 1 disables). |
 | `--wall-offset <mm>` | Grow the surface outward so every wall is at least 2× this thick. `0` turns it off; the default is auto, 0.3mm when walls are too thin. |
 | `--base flatten\|plinth\|none` | Flat cut on the bottom (default), a solid plinth, or nothing. |
@@ -255,7 +289,7 @@ Everything for a job is in `output/<job_id>/`:
 | `job.json` | Job state, settings, the repair report, slice results and file names. |
 | `concept_image.png` / `reference_image.png` | The image the 3D model was built from. |
 | `input_cutout.png` | That image with the background removed (TRELLIS.2 only). |
-| `raw_mesh.glb` | TRELLIS.2/SF3D's raw textured output. |
+| `raw_mesh.glb` | The image-to-3D model's raw textured output. |
 | `candidate_selection.json` | Topology-defect score of each TRELLIS.2 candidate. |
 | `print_ready_mesh.ply` | After repair. |
 | `prepared_mesh.ply` | After print prep (thickening and base). |
@@ -273,6 +307,7 @@ Everything for a job is in `output/<job_id>/`:
 | `IMAGE_GEN_STEPS`, `IMAGE_GEN_SIZE_PX` | 20, 512 | Z-Image Turbo steps and size. More than 512px is wasted, since TRELLIS.2 conditions at 512. |
 | `IMAGE_GEN_PROMPT_SUFFIX` | "single object, centered, white background … thick-walled, sturdy, solid form" | Appended to every prompt; measurably reduces thin walls. |
 | `TRELLIS2_NUM_CANDIDATES` | 3 | Best-of-N reconstruction. |
+| `PIXAL3D_NUM_CANDIDATES` | 1 | The same for Pixal3D; each candidate takes ~7.5 min. |
 | `BACKGROUND_REMOVAL_MODEL` | `birefnet-general` | rembg model that cuts the object out before TRELLIS.2. `u2net` is the old behaviour; `None` leaves it to TRELLIS.2. |
 | `WALL_OFFSET_AUTO_MM` | 0.3 | Offset applied in auto mode when walls are too thin. |
 | `VOXEL_FILL_SEAL_VOXELS` / `VOXEL_FILL_SEAL_MAX_VOXELS` | 2 / 8 | Gap size the repair fill seals by default, and how far it widens when the interior leaks (see [design notes](#design-notes-and-lessons-learned)). |
@@ -281,6 +316,7 @@ Everything for a job is in `output/<job_id>/`:
 | `BAMBU_PROCESS_OVERRIDES` | Arachne, fine features, tree supports | Changes on top of the process profile. |
 | `SLICE_CHECK_WARN_FRACTION` | 0.20 | Unprinted-feature share that triggers a warning. |
 | `IMAGE_SEARCH_MAX_RESULTS` | 12 | Search results shown. |
+| `CONCEPT_BATCH_SIZE` | 3 | Concept images per click in the web UI's review step. |
 
 **Environment variables:**
 
@@ -297,7 +333,9 @@ routes, so another frontend could use them unchanged.
 
 | Method & path | Purpose |
 |---|---|
-| `POST /generate` | Start a job and return `{job_id}` at once. Takes `prompt`, `scale_mm` and optionally `seed`, `image_model`, `num_candidates`, `smoothing_iterations`, `voxel_resolution`, `wall_offset_mm` (`null` = auto), `base_mode` and `reference_image_id`. Returns 409 if a job is already running. |
+| `POST /generate` | Start a job and return `{job_id}` at once. Takes `prompt`, `scale_mm` and optionally `seed`, `image_model`, `num_candidates`, `smoothing_iterations`, `voxel_resolution`, `wall_offset_mm` (`null` = auto), `base_mode` and `reference_image_id`. Returns 409 if a job or concept image is already running. |
+| `POST /concept` | Make one concept image (~40s) from `{prompt, seed?}`, staged like a reference image: `{ref_id, image_url, width, height, seed}`. Build from it with `/generate`'s `reference_image_id`. Returns 409 if busy. |
+| `GET /jobs?limit=` | Summaries of past jobs, newest first: images, models, print measures, base/offset and warnings. Used by the History page. |
 | `GET /status/{job_id}` | The job's `job.json`. |
 | `GET /output/{job_id}/{file}` | Any file in a job folder (also serves `/output/_references/<id>.png`). |
 | `POST /open-in-bambu/{job_id}` | Open the job's `.3mf` (or STL) in Bambu Studio on this Mac. |
@@ -389,6 +427,15 @@ These are the decisions that shaped the pipeline, each tested on real output rat
   different cleanliness: one test was 87% vs 22% of the surface too thin.
 - **A sturdiness suffix on the prompt** cut the too-thin surface from 83% to 69% in a test.
 
+**Pixal3D vs TRELLIS.2** (three images, full pipeline; `research/model-refresh-2026-11.md`)
+
+- **Pixal3D keeps the input's pose.** It estimates the camera (MoGe-2) and reconstructs in that
+  frame, so a curled tail or a walking pose survives; TRELLIS.2 tends to straighten them. The
+  stage turns the model so the front view is the input's view.
+- **But it invents unseen sides worse** (a slab tail, a thin fin down a dragon's back), is
+  bumpier, and takes ~7.5 min at 1024 (about 2× TRELLIS.2, 13GB peak). So it's an option for
+  reference photos, and TRELLIS.2 stays the default.
+
 **Looked at and not adopted**
 
 - **Hunyuan3D 2.1 on a Mac** is capped at 256px textures.
@@ -428,9 +475,11 @@ instead of generating again (`rerun_repair_at_scale.py`, the thickening spikes, 
 pipeline/
   cli.py, orchestrator.py, config.py, types.py
   reference_images.py   # web image search, safe image fetch, upload staging
+  concepts.py           # one concept image at a time, staged for review
+  job_history.py        # job.json summaries for the History page
   stages/
     text_to_image/      # mflux (Z-Image Turbo)
-    image_to_3d/        # TRELLIS.2 (best-of-N) / Stable Fast 3D
+    image_to_3d/        # TRELLIS.2 (best-of-N) / Pixal3D / Stable Fast 3D
     repair/             # watertight/manifold repair, wall-thickness checks
     print_prep/         # wall offset, base, plate placement (Blender)
     export/             # STL export + topology re-validation
@@ -457,7 +506,8 @@ models/                 # local weight cache (gitignored)
 
 ## Third-party code and licenses
 
-`vendor/` contains copies of two upstream projects under their own licenses:
+`vendor/` contains copies of two upstream projects under their own licenses (plus, if you set
+it up, a clone of `pixal3d-mlx`, which isn't committed; Pixal3D's weights are MIT):
 
 - `vendor/trellis2mlx/`: MIT ([LICENSE](vendor/trellis2mlx/LICENSE)).
 - `vendor/stable-fast-3d/`: Stability AI Community License ([LICENSE.md](vendor/stable-fast-3d/LICENSE.md)).

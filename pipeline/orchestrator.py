@@ -135,6 +135,7 @@ class Pipeline:
                 job.current_stage = "text_to_image"
                 self._save(job, job_dir)
                 image = self.text_to_image.generate(prompt, job_dir)
+                job.stage_config["text_to_image_model"] = image.generation_metadata.get("model")
             job.generated_image_path = image.image_path
             self._save(job, job_dir)
 
@@ -142,6 +143,7 @@ class Pipeline:
             self._save(job, job_dir)
             raw_mesh = self.image_to_3d.reconstruct(image, job_dir, num_candidates=num_candidates)
             job.raw_mesh_path = raw_mesh.mesh_path
+            job.stage_config["image_model"] = raw_mesh.source_model
             if "background_removal" in raw_mesh.generation_metadata:
                 job.stage_config["background_removal"] = raw_mesh.generation_metadata["background_removal"]
             self._save(job, job_dir)

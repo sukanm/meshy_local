@@ -28,18 +28,25 @@ from pipeline.types import JobStatus, TextPrompt  # noqa: E402
 
 def build_default_pipeline(image_model: str = "trellis2") -> Pipeline:
     """image_model: "trellis2" (default — better geometric detail, faster;
-    see pipeline/stages/image_to_3d/trellis2_stage.py) or "sf3d" (Stable
+    see pipeline/stages/image_to_3d/trellis2_stage.py), "pixal3d" (keeps a
+    reference photo's pose better, ~2x slower, worse unseen sides) or "sf3d" (Stable
     Fast 3D — smoother output, texture-only detail, official MPS support)."""
     if image_model == "trellis2":
         from pipeline.stages.image_to_3d.trellis2_stage import Trellis2Stage
 
         image_to_3d = Trellis2Stage()
+    elif image_model == "pixal3d":
+        from pipeline.stages.image_to_3d.pixal3d_stage import Pixal3DStage
+
+        image_to_3d = Pixal3DStage()
     elif image_model == "sf3d":
         from pipeline.stages.image_to_3d.sf3d_stage import StableFast3DStage
 
         image_to_3d = StableFast3DStage()
     else:
-        raise ValueError(f"Unknown image_model: {image_model!r} (expected 'trellis2' or 'sf3d')")
+        raise ValueError(
+            f"Unknown image_model: {image_model!r} (expected 'trellis2', 'pixal3d' or 'sf3d')"
+        )
 
     return Pipeline(
         text_to_image=MFluxTextToImageStage(),
@@ -77,7 +84,7 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=None, help="Seed for reproducible generation.")
     parser.add_argument(
         "--image-model",
-        choices=["trellis2", "sf3d"],
+        choices=["trellis2", "pixal3d", "sf3d"],
         default="trellis2",
         help="Image-to-3D backend (default: trellis2).",
     )

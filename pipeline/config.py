@@ -375,6 +375,14 @@ IMAGE_GEN_PROMPT_SUFFIX = (
 # overridable per-request (CLI --candidates, web UI control).
 TRELLIS2_NUM_CANDIDATES = 3
 
+# --- Image-to-3D: optional Pixal3D (2026-11-05) ------------------------------
+# Keeps the input's pose better than TRELLIS.2 but invents unseen sides worse
+# and takes ~7.5 min per run (research/model-refresh-2026-11.md). Its own
+# conda env (scripts/setup_pixal3d.sh); MESHY_PIXAL3D_PYTHON overrides it.
+# One candidate by default because each costs ~7.5 min.
+PIXAL3D_CONDA_ENV = "pixal3d"
+PIXAL3D_NUM_CANDIDATES = 1
+
 # --- Image-to-3D: background removal (2026-11-05) ----------------------------
 # rembg model used to cut the object out before TRELLIS.2. The official
 # TRELLIS.2 pipeline uses BiRefNet; the vendored MLX port defaults to u2net,
@@ -535,3 +543,12 @@ IMAGE_SEARCH_MAX_RESULTS = 12
 # images only) as a last resort.
 BRAVE_SEARCH_API_KEY_ENV = "BRAVE_SEARCH_API_KEY"
 IMAGE_SEARCH_USER_AGENT = "meshy_local/0.1 (personal 3D-printing tool)"
+
+# --- Concept review (web UI, 2026-11-06) -------------------------------------
+# The concept image decides the 3D result more than the image model does
+# (research/model-refresh-2026-11.md: a small loop in one dragon concept became
+# junk on its head), and a bad one costs the full 12-40 min of reconstruction
+# before it shows. So the web UI makes a few concept images first (~40s each)
+# and builds 3D only from the one picked. Picks are staged like reference
+# images (pipeline/concepts.py), so the build uses the reference-image path.
+CONCEPT_BATCH_SIZE = 3

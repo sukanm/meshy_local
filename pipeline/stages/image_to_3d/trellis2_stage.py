@@ -86,6 +86,22 @@ def _topology_defect_count(mesh_path: Path) -> int:
 
 
 class Trellis2Stage:
+    # Overridden by Pixal3DStage, which reuses this class's background
+    # removal and best-of-N candidate loop and only swaps the generator.
+    SOURCE_MODEL = "microsoft/TRELLIS.2-4B (via trellis2mlx)"
+    MODEL_NAME = "trellis2mlx"
+
+    def default_num_candidates(self) -> int:
+        return config.TRELLIS2_NUM_CANDIDATES
+
+    def _generation_metadata(self) -> dict:
+        return {
+            "resolution": self.resolution,
+            "target_faces": self.target_faces,
+            "steps": self.steps,
+            "texture_size": self.texture_size,
+        }
+
     def __init__(
         self,
         resolution: int = 1024,
@@ -102,6 +118,7 @@ class Trellis2Stage:
                 f"vendor/trellis2mlx/README.md (uv venv .venv --python python3.11 "
                 f"&& uv pip install -e .)."
             )
+        self.rembg_python = self.python  # has rembg + the BiRefNet session
         self.resolution = resolution
         self.target_faces = target_faces
         self.steps = steps
@@ -155,7 +172,7 @@ class Trellis2Stage:
         cutout_path = work_dir / CUTOUT_FILENAME
         try:
             result = subprocess.run(
-                [str(self.python), str(REMOVE_BACKGROUND_SCRIPT), str(image.image_path), str(cutout_path),
+                [str(self.rembg_python), str(REMOVE_BACKGROUND_SCRIPT), str(image.image_path), str(cutout_path),
                  "--model", model],
                 capture_output=True,
                 text=True,
@@ -181,19 +198,16 @@ class Trellis2Stage:
         image, background_removal = self._cut_out_background(image, work_dir)
 
         if num_candidates is None:
-            num_candidates = config.TRELLIS2_NUM_CANDIDATES
+            num_candidates = self.default_num_candidates()
 
         if num_candidates <= 1:
             self._generate_one(image, out_path, self.seed)
             return RawMesh(
                 mesh_path=out_path,
-                source_model="microsoft/TRELLIS.2-4B (via trellis2mlx)",
+                source_model=self.SOURCE_MODEL,
                 source_format="glb",
                 generation_metadata={
-                    "resolution": self.resolution,
-                    "target_faces": self.target_faces,
-                    "steps": self.steps,
-                    "texture_size": self.texture_size,
+                    **self._generation_metadata(),
                     "background_removal": background_removal,
                 },
             )
@@ -222,7 +236,7 @@ class Trellis2Stage:
 
         if not scored:
             raise RuntimeError(
-                f"All {num_candidates} trellis2mlx candidate generations failed:\n" + "\n".join(errors)
+                f"All {num_candidates} {self.MODEL_NAME} candidate generations failed:\n" + "\n".join(errors)
             )
 
         scored.sort(key=lambda t: t[0])
@@ -247,13 +261,10 @@ class Trellis2Stage:
 
         return RawMesh(
             mesh_path=out_path,
-            source_model="microsoft/TRELLIS.2-4B (via trellis2mlx)",
+            source_model=self.SOURCE_MODEL,
             source_format="glb",
             generation_metadata={
-                "resolution": self.resolution,
-                "target_faces": self.target_faces,
-                "steps": self.steps,
-                "texture_size": self.texture_size,
+                **self._generation_metadata(),
                 "background_removal": background_removal,
                 "num_candidates": num_candidates,
                 "selected_seed": best_seed,

@@ -65,6 +65,40 @@
   .PRINT_READY_WITH_WARNINGS { color: #b8860b; }
   .NEEDS_MANUAL_REPAIR { color: #b00020; }
   #error { color: #b00020; margin-top: 1rem; }
+  header.top { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+  header.top a { color: inherit; font-size: 0.9rem; }
+  label.check { display: flex; gap: 0.5rem; align-items: flex-start; font-size: 0.9rem; opacity: 1; margin-bottom: 0.75rem; }
+  label.check input { margin-top: 0.2rem; }
+  #concepts { margin-top: 1.25rem; }
+  #concepts h2 { font-size: 1.05rem; margin: 0 0 0.25rem; }
+  #concepts .inline { margin-top: 0.75rem; flex-wrap: wrap; }
+  .concept-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+  }
+  .concept-grid button {
+    padding: 0;
+    border: 3px solid transparent;
+    border-radius: 8px;
+    background: color-mix(in srgb, CanvasText 6%, transparent);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    text-align: left;
+  }
+  .concept-grid button:hover:not(:disabled), .concept-grid button:focus-visible {
+    border-color: color-mix(in srgb, CanvasText 35%, transparent);
+  }
+  .concept-grid button.selected { border-color: #2f6fdb; }
+  .concept-grid img { width: 100%; aspect-ratio: 1; object-fit: contain; display: block; background: #fff; }
+  .concept-grid .pending {
+    width: 100%; aspect-ratio: 1; display: flex; align-items: center; justify-content: center;
+    font-size: 0.85rem; opacity: 0.7; text-align: center; padding: 0.5rem; box-sizing: border-box;
+  }
+  .concept-grid .caption { font-size: 0.75rem; opacity: 0.7; padding: 0.25rem 0.4rem; }
+  .concept-grid .built { font-weight: 600; opacity: 1; }
   #actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 1rem; }
   a.button {
     display: inline-block;
@@ -142,11 +176,15 @@
   @media (max-width: 480px) {
     .preview-grid { grid-template-columns: 1fr; }
     .ref-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .concept-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
 </style>
 </head>
 <body>
-  <h1>meshy_local — text → 3D → STL</h1>
+  <header class="top">
+    <h1>meshy_local — text → 3D → STL</h1>
+    <a href="history.html">History &amp; compare</a>
+  </header>
 
   <div class="row">
     <div>
@@ -201,6 +239,7 @@
         <label for="imageModel">Image-to-3D model</label>
         <select id="imageModel">
           <option value="trellis2" selected>TRELLIS.2 (detailed, default)</option>
+          <option value="pixal3d">Pixal3D (keeps a photo's pose, ~2× slower, rougher unseen sides)</option>
           <option value="sf3d">Stable Fast 3D (smoother, texture-only detail)</option>
         </select>
       </div>
@@ -218,7 +257,7 @@
     <p class="slider-value">Both sliders only affect output when the repair stage has to fall back to voxel remeshing to make a mesh watertight (shown in the report below as "voxel_remesh_used") — most jobs don't hit this path at all.</p>
     <div class="row">
       <div>
-        <label for="candidates">Candidates (TRELLIS.2 only) — <span id="candidatesValue" class="slider-value"></span></label>
+        <label for="candidates">Candidates (TRELLIS.2 and Pixal3D) — <span id="candidatesValue" class="slider-value"></span></label>
         <input id="candidates" type="range" min="1" max="8" step="1" />
       </div>
     </div>
@@ -253,7 +292,23 @@
     <p class="slider-value">Thickening grows the whole surface outward by the offset, so every wall is at least 2× the offset thick. More offset = sturdier but blunter spikes: 0.3mm keeps points sharp and prints with Arachne walls; 0.6mm guarantees the full 1.2mm wall but rounds fine tips. Every job is also sliced in Bambu Studio (P2S, PLA, 0.12mm layers, Arachne walls, tree supports) — open the .3mf to print with those settings.</p>
   </details>
 
-  <button id="generate">Generate</button>
+  <label class="check" id="reviewConceptsWrap">
+    <input type="checkbox" id="reviewConcepts" checked />
+    Show me concept images first, and build 3D only from the one I pick (recommended — a bad concept wastes 12–40 min)
+  </label>
+  <button id="generate">Make concept images</button>
+
+  <section id="concepts" hidden>
+    <h2>Pick a concept image</h2>
+    <p class="muted">Pick one with a clear, solid shape: small loops, floating bits and painted-on detail come out badly in 3D.
+      To change the idea, edit the prompt and click <em>Make concept images</em> again.</p>
+    <div id="conceptGrid" class="concept-grid"></div>
+    <div class="inline">
+      <button type="button" id="conceptBuild" disabled>Build 3D from the selected image</button>
+      <button type="button" id="conceptMore">Make more</button>
+    </div>
+    <p id="conceptStatus" class="muted"></p>
+  </section>
 
   <div id="error"></div>
 
@@ -281,6 +336,6 @@
     <div id="previews" hidden></div>
   </div>
 
-<script src="app.js?v=ref1"></script>
+<script src="app.js?v=concepts1"></script>
 </body>
 </html>

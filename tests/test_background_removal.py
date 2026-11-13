@@ -28,7 +28,7 @@ def _object_on_white(path: Path) -> Path:
 def _stage() -> Trellis2Stage:
     # Skip __init__'s venv check: these tests replace the subprocess call.
     stage = object.__new__(Trellis2Stage)
-    stage.python = Path("/nonexistent/python3")
+    stage.python = stage.rembg_python = Path("/nonexistent/python3")
     return stage
 
 
@@ -87,7 +87,7 @@ _MODEL_FILE = Path.home() / ".rembg" / "models" / "birefnet-general" / "birefnet
 def test_real_cutout_is_rgba_with_background_removed(tmp_path):
     src = _object_on_white(tmp_path / "in.png")
     stage = _stage()
-    stage.python = _VENV_PYTHON
+    stage.python = stage.rembg_python = _VENV_PYTHON
     image, info = stage._cut_out_background(_image(src), tmp_path)
     assert image.image_path == tmp_path / CUTOUT_FILENAME
     alpha = np.asarray(Image.open(image.image_path))[:, :, 3]

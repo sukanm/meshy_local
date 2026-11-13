@@ -44,6 +44,13 @@ const refClearEl = document.getElementById("refClear");
 const inputImageEl = document.getElementById("inputImage");
 const inputImageImgEl = document.getElementById("inputImageImg");
 const inputImageCaptionEl = document.getElementById("inputImageCaption");
+const reviewConceptsEl = document.getElementById("reviewConcepts");
+const reviewConceptsWrapEl = document.getElementById("reviewConceptsWrap");
+const conceptsEl = document.getElementById("concepts");
+const conceptGridEl = document.getElementById("conceptGrid");
+const conceptBuildEl = document.getElementById("conceptBuild");
+const conceptMoreEl = document.getElementById("conceptMore");
+const conceptStatusEl = document.getElementById("conceptStatus");
 
 const DEFAULT_WALL_AUTO_MM = 0.3;
 const STAGE_LABELS = {
@@ -64,6 +71,16 @@ let viewerMode = "raw";
 let selectedRef = null; // { ref_id, image_url, width, height, label }
 let searchResults = [];
 let searchProvider = "";
+let jobActive = false; // a 3D job started from this page is running
+// Concept review: images made so far for `conceptPrompt`, the one picked,
+// and the batch being made ({ cancelled, current: in-flight request }).
+let conceptBatchSize = 3;
+let conceptPrompt = "";
+let nextConceptSeed = null; // null = random seeds
+let concepts = [];
+let selectedConcept = null;
+let conceptRun = null;
+let conceptRestarting = false;
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -89,6 +106,7 @@ function updateWallOffsetVisibility() {
     const fromServer = Number(d.wall_offset_auto_mm);
     if (Number.isFinite(fromServer) && fromServer > 0) wallAuto = fromServer;
     baseModeEl.value = ["flatten", "plinth", "none"].includes(d.base_mode) ? d.base_mode : "flatten";
+    if (Number(d.concept_batch_size) > 0) conceptBatchSize = Number(d.concept_batch_size);
   } catch {
     smoothingEl.value = 10;
     detailEl.value = 350;
@@ -112,6 +130,19 @@ detailEl.addEventListener("input", () => {
   detailValueEl.textContent = detailEl.value;
 });
 candidatesEl.addEventListener("input", () => {
+  candidatesValueEl.textContent = candidatesEl.value;
+});
+// Each Pixal3D candidate takes ~7.5 min, so switching to it drops the
+// candidate count to 1; switching back restores the TRELLIS.2 default.
+let trellisCandidates = null;
+imageModelEl.addEventListener("change", () => {
+  if (imageModelEl.value === "pixal3d") {
+    trellisCandidates = candidatesEl.value;
+    candidatesEl.value = 1;
+  } else if (trellisCandidates !== null) {
+    candidatesEl.value = trellisCandidates;
+    trellisCandidates = null;
+  }
   candidatesValueEl.textContent = candidatesEl.value;
 });
 wallModeEl.addEventListener("change", updateWallOffsetVisibility);
@@ -161,8 +192,31 @@ function setRefStatus(text, isError = false) {
 }
 
 function updateGenerateLabel() {
-  generateBtn.textContent = selectedRef ? "Generate from reference image" : "Generate";
+  // A reference image goes straight to 3D; concept review only applies to text prompts.
+  reviewConceptsWrapEl.hidden = Boolean(selectedRef);
+  generateBtn.textContent = selectedRef
+    ? "Generate from reference image"
+    : reviewConceptsEl.checked
+      ? "Make concept images"
+      : "Generate";
 }
+
+function updateButtons() {
+  generateBtn.disabled = jobActive;
+  conceptMoreEl.disabled = jobActive || conceptRun !== null || !conceptPrompt;
+  conceptBuildEl.disabled = jobActive || !selectedConcept;
+}
+
+try {
+  if (localStorage.getItem("meshy.reviewConcepts") === "0") reviewConceptsEl.checked = false;
+} catch {}
+updateGenerateLabel();
+reviewConceptsEl.addEventListener("change", () => {
+  try {
+    localStorage.setItem("meshy.reviewConcepts", reviewConceptsEl.checked ? "1" : "0");
+  } catch {}
+  updateGenerateLabel();
+});
 
 function selectRef(ref, label) {
   selectedRef = { ...ref, label };
@@ -412,9 +466,11 @@ function renderInputImage(job, jobId) {
   const name = String(job.generated_image_path).split("/").pop();
   inputImageImgEl.src = `/output/${jobId}/${encodeURIComponent(name)}`;
   const ref = job.stage_config && job.stage_config.reference_image;
-  inputImageCaptionEl.textContent = ref
-    ? `Built from your reference image${ref.title ? `: ${ref.title}` : ""}`
-    : "Built from this generated concept image";
+  inputImageCaptionEl.textContent = isConceptJob(job)
+    ? `Built from the concept image you picked (seed ${ref.seed})`
+    : ref
+      ? `Built from your reference image${ref.title ? `: ${ref.title}` : ""}`
+      : "Built from this generated concept image";
   inputImageEl.hidden = false;
 }
 
@@ -426,7 +482,12 @@ async function poll(jobId) {
   const job = await res.json();
 
   jobStatusEl.textContent = job.status;
-  stageEl.textContent = job.current_stage ? `stage: ${STAGE_LABELS[job.current_stage] || job.current_stage}` : "";
+  const fromConcept = isConceptJob(job);
+  const stageLabel =
+    job.current_stage === "reference_image" && fromConcept
+      ? "using the concept image you picked"
+      : STAGE_LABELS[job.current_stage] || job.current_stage;
+  stageEl.textContent = job.current_stage ? `stage: ${stageLabel}` : "";
   renderInputImage(job, jobId);
 
   if (job.raw_mesh_path && !viewerSources.raw) {
@@ -445,11 +506,11 @@ async function poll(jobId) {
     renderSlice(job.slice_result);
     renderPreviews(job.preview_images, jobId);
     renderActions(job, jobId);
-    generateBtn.disabled = false;
+    jobFinished(jobId, "built");
   } else if (job.status === "FAILED") {
     clearInterval(pollTimer);
     errorEl.textContent = `Job failed: ${job.error || "unknown error"}`;
-    generateBtn.disabled = false;
+    jobFinished(jobId, "failed");
   }
 }
 
@@ -469,10 +530,14 @@ openBambuEl.addEventListener("click", async () => {
   }
 });
 
-generateBtn.addEventListener("click", async () => {
-  resetResults();
-  generateBtn.disabled = true;
+function isConceptJob(job) {
+  const ref = job.stage_config && job.stage_config.reference_image;
+  return Boolean(ref && ref.kind === "concept");
+}
 
+// The settings shared by every way of starting a job. `source` is either a
+// picked concept ({ prompt, ref_id, seed }) or null for the form as it is.
+function buildRequestBody(source) {
   const wallOffset = parseFloat(wallOffsetEl.value);
   const body = {
     prompt: promptEl.value.trim(),
@@ -487,6 +552,12 @@ generateBtn.addEventListener("click", async () => {
       Number.isFinite(wallOffset) ? wallOffset : DEFAULT_WALL_AUTO_MM,
     base_mode: baseModeEl.value,
   };
+  if (source) {
+    body.prompt = source.prompt;
+    body.reference_image_id = source.ref_id;
+    body.seed = source.seed;
+    return body;
+  }
   if (seedEl.value !== "") {
     body.seed = parseInt(seedEl.value, 10);
   }
@@ -495,35 +566,176 @@ generateBtn.addEventListener("click", async () => {
     if (!body.prompt) body.prompt = selectedRef.label.slice(0, 800);
   } else if (!body.prompt) {
     errorEl.textContent = "Enter a prompt or choose a reference image.";
-    generateBtn.disabled = false;
-    return;
+    return null;
   }
+  return body;
+}
 
+async function startJob(body, concept = null) {
+  resetResults();
+  jobActive = true;
+  updateButtons();
   try {
-    const res = await fetch("/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.detail || `HTTP ${res.status}`);
-    }
-    const { job_id } = await res.json();
+    const { job_id } = await postJson("/generate", body);
     currentJobId = job_id;
+    if (concept) {
+      concept.jobId = job_id;
+      setConceptCaption(concept, "building…");
+    }
 
     statusEl.hidden = false;
     jobIdEl.textContent = job_id;
     jobStatusEl.textContent = "PENDING";
     stageEl.textContent = "";
+    statusEl.scrollIntoView({ behavior: "smooth", block: "start" });
 
     if (pollTimer) clearInterval(pollTimer);
     pollTimer = setInterval(() => poll(job_id), 5000);
     poll(job_id);
   } catch (e) {
     errorEl.textContent = e.message;
-    generateBtn.disabled = false;
+    jobActive = false;
+    updateButtons();
   }
+}
+
+function jobFinished(jobId, outcome) {
+  jobActive = false;
+  const concept = concepts.find((c) => c.jobId === jobId);
+  if (concept) setConceptCaption(concept, outcome === "built" ? `built — job ${jobId}` : "failed");
+  updateButtons();
+}
+
+// --- Concept review ----------------------------------------------------------
+
+function setConceptCaption(concept, note) {
+  const caption = concept.el.querySelector(".caption");
+  caption.textContent = note ? `seed ${concept.seed} · ${note}` : `seed ${concept.seed}`;
+  caption.classList.toggle("built", Boolean(note));
+}
+
+function addPendingTile() {
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.disabled = true;
+  btn.innerHTML = '<div class="pending">Making a concept image…</div><span class="caption">&nbsp;</span>';
+  conceptGridEl.appendChild(btn);
+  return btn;
+}
+
+function fillTile(btn, result, prompt) {
+  const concept = { ref_id: result.ref_id, seed: result.seed, prompt, el: btn, jobId: null };
+  concepts.push(concept);
+  btn.innerHTML = `<img src="${escapeHtml(result.image_url)}" alt="Concept image, seed ${Number(
+    result.seed
+  )}" /><span class="caption"></span>`;
+  setConceptCaption(concept, "");
+  btn.disabled = false;
+  btn.addEventListener("click", () => selectConcept(concept));
+  btn.addEventListener("dblclick", () => {
+    selectConcept(concept);
+    if (!conceptBuildEl.disabled) conceptBuildEl.click();
+  });
+}
+
+function selectConcept(concept) {
+  selectedConcept = concept;
+  for (const c of concepts) c.el.classList.toggle("selected", c === concept);
+  if (!conceptRun) conceptStatusEl.textContent = `Selected seed ${concept.seed}.`;
+  updateButtons();
+}
+
+async function runConcepts(prompt, count) {
+  const run = { cancelled: false, current: null, failed: false };
+  conceptRun = run;
+  updateButtons();
+  for (let i = 0; i < count && !run.cancelled; i++) {
+    const tile = addPendingTile();
+    conceptStatusEl.textContent = `Making concept image ${i + 1} of ${count} (about 40s each)…`;
+    const payload = { prompt };
+    if (nextConceptSeed !== null) payload.seed = nextConceptSeed;
+    run.current = postJson("/concept", payload);
+    try {
+      const result = await run.current;
+      fillTile(tile, result, prompt);
+      if (nextConceptSeed !== null) nextConceptSeed = result.seed + 1;
+    } catch (e) {
+      tile.remove();
+      conceptStatusEl.textContent = `Couldn't make a concept image: ${e.message}`;
+      run.failed = true;
+      break;
+    }
+  }
+  run.current = null;
+  if (conceptRun === run) conceptRun = null;
+  if (!run.failed && !jobActive) {
+    conceptStatusEl.textContent = selectedConcept
+      ? `Selected seed ${selectedConcept.seed}.`
+      : "Click an image to select it (double-click builds it straight away).";
+  }
+  updateButtons();
+}
+
+// Stops making further concepts and waits for the one in progress, since the
+// server runs one heavy job at a time.
+async function stopConceptRun() {
+  const run = conceptRun;
+  if (!run) return;
+  run.cancelled = true;
+  if (run.current) {
+    conceptStatusEl.textContent = "Finishing the concept image in progress…";
+    try {
+      await run.current;
+    } catch {}
+  }
+  while (conceptRun === run) await new Promise((r) => setTimeout(r, 50));
+}
+
+async function startConcepts() {
+  const prompt = promptEl.value.trim();
+  if (!prompt) {
+    errorEl.textContent = "Enter a prompt.";
+    return;
+  }
+  if (conceptRestarting) return;
+  conceptRestarting = true;
+  try {
+    await stopConceptRun();
+  } finally {
+    conceptRestarting = false;
+  }
+  concepts = [];
+  selectedConcept = null;
+  conceptGridEl.innerHTML = "";
+  conceptPrompt = prompt;
+  nextConceptSeed = seedEl.value !== "" ? parseInt(seedEl.value, 10) : null;
+  conceptsEl.hidden = false;
+  runConcepts(prompt, conceptBatchSize);
+}
+
+conceptMoreEl.addEventListener("click", () => {
+  if (conceptPrompt && !conceptRun) runConcepts(conceptPrompt, conceptBatchSize);
+});
+
+conceptBuildEl.addEventListener("click", async () => {
+  const concept = selectedConcept;
+  if (!concept || jobActive) return;
+  jobActive = true; // blocks double-starts while the batch winds down
+  updateButtons();
+  await stopConceptRun();
+  conceptStatusEl.textContent = `Building 3D from seed ${concept.seed}. You can pick another and build it after this one finishes.`;
+  jobActive = false;
+  startJob(buildRequestBody(concept), concept);
+});
+
+generateBtn.addEventListener("click", () => {
+  errorEl.textContent = "";
+  if (!selectedRef && reviewConceptsEl.checked) {
+    startConcepts();
+    return;
+  }
+  const body = buildRequestBody(null);
+  if (body) startJob(body);
 });
 
 // Lets you reopen a finished job: http://127.0.0.1:8420/?job=<job_id>

@@ -72,3 +72,73 @@ transparency, so the pipeline can cut the object out itself and pass an RGBA PNG
 - mflux model list: github.com/filipstrand/mflux
 - Qwen-Image-2.1: alternativeto.net/news/2026/9/alibaba-launches-qwen-image-2-1-…; orcarouter.ai/blog/qwen-image-2-1-open-weights-research-license
 - Z-Image Turbo #1 (Dec 2025): x.com/ArtificialAnlys/status/2002839525609865575
+
+## Result: Pixal3D vs TRELLIS.2 (tested 2026-11-05)
+
+Setup: `vendor/pixal3d-mlx` at `abc9a2e`, conda env `pixal3d`, resolution 1024, seed 7, the same
+BiRefNet cut-out for both models, then each raw mesh through the full pipeline (repair, auto print
+prep, flatten base, export, Bambu slice) at 80mm. One seed per model per image (production TRELLIS.2
+keeps the best of 3). Jobs are in `output/cmp-{trellis,pixal3d}-{godzilla,photo,dragon}`.
+
+| | Godzilla concept | | Web photo | | Chibi dragon | |
+|---|---|---|---|---|---|---|
+| | TRELLIS.2 | Pixal3D | TRELLIS.2 | Pixal3D | TRELLIS.2 | Pixal3D |
+| Generation time | 3.6 min | 7.3 min | 3.9 min | 8.3 min | 15 min* | 7.6 min |
+| Raw boundary + non-manifold edges | 5,641 | 5,588 | 3,774 | 4,174 | 1,468 | 7,725 |
+| Unprinted features (slicer) | 20/272 | 26/297 | 6/233 | 25/285 | 1/137 | 1/176 |
+| Surface below 1.2mm (after print prep) | 16% | 11% | 11% | 10% | 1% | not measured |
+| Matches the input's pose | no — leans forward, tail stretched out | **yes** | roughly | **yes** | yes | yes (face closer) |
+| Unseen side (back/tail) | plausible | lumpy spikes | flat plank tail | **huge slab tail** | clean | **thin fin down the back, wavy tail plate** |
+
+\* TRELLIS.2's dragon run was slowed by the Pixal3D install/download running at the same time.
+
+Memory: Pixal3D peaked at 13.2GB GPU at 1024 on this 48GB Mac (the README's 33GB/64GB figures are
+for an older version); ~7–8 min per run, about 2× TRELLIS.2.
+
+Setup gotchas: the port hard-codes HF snapshot `0b31f91…`; the single-view weights are identical
+in the current snapshot, so that folder is a symlink to it. MoGe-2 (`Ruicheng/moge-2-vitl`) ships
+as a PyTorch pickle that moge-mlx would load with `weights_only=False`; it was converted once to
+safetensors with `weights_only=True` instead. Without MoGe it silently uses a default 49° FOV
+(MoGe estimated 23–24° on these images).
+
+**Conclusion:** Pixal3D reproduces what the camera sees noticeably better — Godzilla's upright pose
+and curled tail, the photo's walking pose — which is what its paper claims. But it invents worse
+geometry for what the image doesn't show (a slab tail, a fin down the dragon's back), its surfaces
+are bumpier, its raw meshes are no cleaner, and it's twice as slow. TRELLIS.2 stays the default.
+Pixal3D could be worth offering as an option for reference photos where the pose matters, viewed
+before printing.
+
+## Result: Qwen-Image-2.1-Turbo vs Z-Image Turbo (tested 2026-11-05)
+
+Setup: three prompts (Godzilla figure, owl figurine, small cute dragon figurine) with the usual
+prompt suffix, seed 7. Z-Image Turbo at production settings (512px, 20 steps, 8-bit, mflux 0.19.2);
+Qwen-Image-2.1-Turbo at its own defaults (1024px, 8 steps, 8-bit, mflux 0.24.0 in a separate conda
+env `mflux024`). Each concept then went through the full production pipeline: TRELLIS.2 best of 3
+(seeds 7–9), repair, auto print prep, export, Bambu slice, at 80mm. Jobs are in
+`output/cmp-img-{zimage,qwen}-{godzilla,owl,dragon}`. One image per model per prompt.
+
+| | Godzilla | | Owl | | Dragon | |
+|---|---|---|---|---|---|---|
+| | Z-Image | Qwen | Z-Image | Qwen | Z-Image | Qwen |
+| Concept style | dramatic 3/4, big spikes | stocky, straight-on | white sculpted figurine | realistic painted owl | yellow chibi; a small loop on its head | green chibi with wings |
+| Best candidate's raw defects | 17,453 | 26,603 | 125 | 5,533 | 1,348 | 146 |
+| Unprinted features (slicer) | **16/243** | 46/204 | 0/87 | 0/81 | 22/244 | **1/122** |
+| Surface below 1.2mm | 16% (0.3mm offset applied) | 13% | 0.3% | 1.7% | 16% | 4% |
+| Seal widened (hollow-fill fix) | 3 | 3 | — | **6** | 3 | — |
+| Visual result | spiky, characterful | cleaner, plainer | carved feathers and eyes | wavy surface, pits; painted plumage lost | **a tangled blob sticking out of the head** | clean: wings, eyes, spines |
+
+Qwen took ~57s per image (vs ~42s), 23GB peak MLX memory, and 32.5GB of weights.
+
+**Conclusion: no consistent winner; Z-Image Turbo stays.** Each model won one subject clearly
+(Z-Image the Godzilla, Qwen the dragon) and Z-Image won the owl visually. The bigger factor is
+*style*: Qwen tends toward realistic, painted objects whose detail is colour, which the STL can't
+carry; Z-Image (with the "figurine… solid form" suffix) more often produces a sculpt whose detail is
+shape. The Z-Image dragon's failure came from a small loop in the concept that TRELLIS.2 turned into
+junk, not from the image quality as such. Not worth the non-commercial licence, the mflux upgrade,
+and +32GB for this. A possible later test: a "single-colour unpainted sculpture" suffix for both.
+
+Also found: the flatten base was skipped ("boolean result wasn't a closed manifold") on both Qwen
+jobs and on the Pixal3D dragon, i.e. independent of the image model — a print-prep bug to fix.
+Separately, TRELLIS.2 runs at ~47GB footprint on some subjects (owl, dragon) and swaps on this 48GB
+Mac, ~14 min per candidate instead of ~4; that probably also explains the earlier
+slow dragon run.

@@ -16,11 +16,11 @@ class GenerateRequest(BaseModel):
     prompt: str = Field(default="", max_length=800)
     scale_mm: float = Field(gt=0, le=256, description="Target longest dimension in mm.")
     seed: int | None = None
-    image_model: Literal["trellis2", "sf3d"] = "trellis2"
+    image_model: Literal["trellis2", "pixal3d", "sf3d"] = "trellis2"
     smoothing_iterations: int | None = Field(default=None, ge=0, le=25)
     voxel_resolution: int | None = Field(default=None, ge=50, le=600)
     num_candidates: int | None = Field(
-        default=None, ge=1, le=8, description="TRELLIS.2 only; ignored for sf3d."
+        default=None, ge=1, le=8, description="TRELLIS.2 and Pixal3D; ignored for sf3d."
     )
     wall_offset_mm: float | None = Field(
         default=None, ge=0, le=2, description="None = auto, 0 = off, >0 = outward offset in mm."
@@ -53,6 +53,21 @@ class ReferenceImageResponse(BaseModel):
     image_url: str
     width: int
     height: int
+
+
+class ConceptRequest(BaseModel):
+    prompt: str = Field(min_length=1, max_length=800)
+    seed: int | None = Field(default=None, ge=0, le=2**31 - 1)
+
+    @model_validator(mode="after")
+    def _not_blank(self) -> "ConceptRequest":
+        if not self.prompt.strip():
+            raise ValueError("Enter a prompt.")
+        return self
+
+
+class ConceptResponse(ReferenceImageResponse):
+    seed: int
 
 
 class GenerateResponse(BaseModel):

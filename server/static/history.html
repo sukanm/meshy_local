@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>meshy_local history</title>
+<script type="module" src="https://ajax.googleapis.com/ajax/libs/model-viewer/3.5.0/model-viewer.min.js"></script>
+<style>
+  :root {
+    color-scheme: light dark;
+    --line: color-mix(in srgb, CanvasText 18%, transparent);
+    --tint: color-mix(in srgb, CanvasText 6%, transparent);
+    --accent: #2f6fdb;
+    --good: #1a7a1a;
+    --warn: #b8860b;
+    --bad: #b00020;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --good: #5cc65c; --warn: #e0b040; --bad: #ff6b7f; --accent: #6b9bff; }
+  }
+  [hidden] { display: none !important; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    max-width: 1200px;
+    margin: 2rem auto;
+    padding: 0 16px;
+    background: Canvas;
+    color: CanvasText;
+  }
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+  h1 { font-size: 1.3rem; margin: 0 0 0.75rem; }
+  a { color: inherit; }
+  button {
+    font: inherit;
+    padding: 0.45rem 0.9rem;
+    cursor: pointer;
+  }
+  button:disabled { cursor: default; opacity: 0.6; }
+  .muted { font-size: 0.85rem; opacity: 0.7; }
+  .toolbar { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-bottom: 1rem; }
+  .toolbar input[type="search"] { flex: 1; min-width: 200px; font: inherit; padding: 0.45rem; }
+  .toolbar label { font-size: 0.9rem; display: flex; gap: 0.35rem; align-items: center; }
+  .compare-bar {
+    position: sticky; top: 0; z-index: 2;
+    display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap;
+    padding: 0.6rem 0.75rem; margin-bottom: 1rem;
+    background: Canvas; border: 1px solid var(--line); border-radius: 8px;
+  }
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+    gap: 0.75rem;
+  }
+  .card {
+    border: 2px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+  .card.chosen { border-color: var(--accent); }
+  .card a.thumb { display: block; background: var(--tint); aspect-ratio: 1; }
+  .card a.thumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .card a.thumb .none { display: flex; height: 100%; align-items: center; justify-content: center; font-size: 0.85rem; opacity: 0.6; }
+  .card .body { padding: 0.5rem 0.6rem 0.6rem; display: flex; flex-direction: column; gap: 0.3rem; flex: 1; }
+  .card .prompt {
+    font-size: 0.9rem; font-weight: 600;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .card .facts { font-size: 0.8rem; opacity: 0.8; }
+  .card label { font-size: 0.85rem; display: flex; gap: 0.35rem; align-items: center; margin-top: auto; cursor: pointer; }
+  .tag { font-size: 0.75rem; font-weight: 600; }
+  .good { color: var(--good); }
+  .warn { color: var(--warn); }
+  .bad { color: var(--bad); }
+
+  .compare-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; }
+  table.compare { border-collapse: collapse; width: 100%; table-layout: fixed; }
+  table.compare th, table.compare td {
+    border-bottom: 1px solid var(--line);
+    padding: 0.5rem;
+    vertical-align: top;
+    text-align: left;
+    font-size: 0.88rem;
+  }
+  table.compare th[scope="row"] { width: 130px; font-weight: 600; opacity: 0.8; position: sticky; left: 0; background: Canvas; }
+  table.compare td { min-width: 200px; }
+  table.compare thead th { font-size: 0.9rem; }
+  table.compare img { width: 100%; display: block; border-radius: 6px; background: #111; }
+  table.compare img.input { background: #fff; object-fit: contain; aspect-ratio: 1; }
+  table.compare .views { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.35rem; }
+  table.compare .views figure { margin: 0; }
+  table.compare .views figcaption { font-size: 0.75rem; opacity: 0.7; margin-top: 0.15rem; }
+  table.compare td.best { font-weight: 700; color: var(--good); }
+  table.compare ul { margin: 0; padding-left: 1rem; }
+  table.compare li { margin-bottom: 0.25rem; }
+  table.compare model-viewer { width: 100%; height: 260px; background: #f0f0f0; border-radius: 6px; }
+  .compare-head { display: flex; gap: 0.75rem; align-items: center; flex-wrap: wrap; margin-bottom: 0.75rem; }
+  @media (max-width: 600px) {
+    .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    table.compare th[scope="row"] { width: 90px; }
+    table.compare td { min-width: 160px; }
+    table.compare { table-layout: auto; }
+  }
+</style>
+</head>
+<body>
+  <header>
+    <h1>History &amp; compare</h1>
+    <a href="/">← Make a new model</a>
+  </header>
+
+  <section id="listView">
+    <div class="toolbar">
+      <input id="filter" type="search" placeholder="Filter by prompt or job id" aria-label="Filter jobs" />
+      <label><input type="checkbox" id="onlyFinished" checked /> Finished only</label>
+      <span id="count" class="muted"></span>
+    </div>
+    <div class="compare-bar" id="compareBar" hidden>
+      <span id="compareCount"></span>
+      <button type="button" id="compareGo">Compare side by side</button>
+      <button type="button" id="compareClear">Clear</button>
+    </div>
+    <div id="grid" class="grid"></div>
+    <p id="listStatus" class="muted">Loading jobs…</p>
+  </section>
+
+  <section id="compareView" hidden>
+    <div class="compare-head">
+      <button type="button" id="backToList">← All jobs</button>
+      <button type="button" id="toggle3d">Show 3D models</button>
+      <span class="muted">Green marks the best value in a row. Lower is better for all three print measures.</span>
+    </div>
+    <div class="compare-wrap"><table class="compare" id="compareTable"></table></div>
+  </section>
+
+<script src="history.js?v=2"></script>
+</body>
+</html>
